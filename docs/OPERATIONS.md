@@ -43,6 +43,18 @@ docker compose --env-file /etc/avito-hunt/avito-hunt.env ps
 docker compose --env-file /etc/avito-hunt/avito-hunt.env logs --tail=100 bot worker
 ```
 
+## Тестовое уведомление
+
+Команда создаёт внутри базы десять тестовых аналогов и один явно помеченный тестовый вариант ниже рынка. Она использует настоящий production-алгоритм и отправляет сообщение всем активным пользователям:
+
+```bash
+cd /opt/avito-hunt
+docker compose --env-file /etc/avito-hunt/avito-hunt.env run --rm worker \
+  python -m avito_hunt.demo_alert
+```
+
+Тестовые ссылки ведут только на главную страницу Avito и не являются реальными объявлениями.
+
 ## Ручное развёртывание
 
 ```bash
