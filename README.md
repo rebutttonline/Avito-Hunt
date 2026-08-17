@@ -56,4 +56,5 @@ pytest -q
 
 - [Границы MVP](docs/MVP.md)
 - [Формат источника данных](docs/SOURCE.md)
+- [Исследование поставщиков данных](docs/DATA_PROVIDERS.md)
 - [Эксплуатация сервера](docs/OPERATIONS.md)
