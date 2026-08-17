@@ -19,6 +19,16 @@ else
     git -C "$APP_DIR" reset --hard origin/main
 fi
 
+# Keep root-owned operational files synchronized with the reviewed main branch.
+install -m 755 "$APP_DIR/deploy/deploy-avito-hunt" /usr/local/sbin/deploy-avito-hunt
+install -m 755 "$APP_DIR/deploy/backup-avito-hunt" /usr/local/sbin/backup-avito-hunt
+install -m 644 "$APP_DIR/deploy/avito-hunt-backup.service" \
+    /etc/systemd/system/avito-hunt-backup.service
+install -m 644 "$APP_DIR/deploy/avito-hunt-backup.timer" \
+    /etc/systemd/system/avito-hunt-backup.timer
+systemctl daemon-reload
+systemctl enable --now avito-hunt-backup.timer
+
 compose=(docker compose --env-file "$ENV_FILE" --project-directory "$APP_DIR" -f "$APP_DIR/compose.yaml")
 "${compose[@]}" config --quiet
 "${compose[@]}" build --pull
