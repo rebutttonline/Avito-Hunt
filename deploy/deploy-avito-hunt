@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly REPOSITORY="git@github.com:rebutttonline/Avito-Hunt.git"
+readonly APP_DIR="/opt/avito-hunt"
+readonly ENV_FILE="/etc/avito-hunt/avito-hunt.env"
+readonly SSH_KEY="/root/.ssh/avito_hunt_github"
+
+exec 9>/run/lock/avito-hunt-deploy.lock
+flock -n 9 || { echo "Another deployment is already running" >&2; exit 1; }
+
+test -f "$ENV_FILE" || { echo "Missing $ENV_FILE" >&2; exit 1; }
+
+export GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+if [ ! -d "$APP_DIR/.git" ]; then
+    git clone "$REPOSITORY" "$APP_DIR"
+else
+    git -C "$APP_DIR" fetch --prune origin main
+    git -C "$APP_DIR" reset --hard origin/main
+fi
+
+compose=(docker compose --env-file "$ENV_FILE" --project-directory "$APP_DIR" -f "$APP_DIR/compose.yaml")
+"${compose[@]}" config --quiet
+"${compose[@]}" build --pull
+"${compose[@]}" up -d --remove-orphans
+
+for attempt in $(seq 1 30); do
+    unhealthy="$("${compose[@]}" ps --format json | grep -cE '"Health":"unhealthy"|"State":"exited"' || true)"
+    starting="$("${compose[@]}" ps --format json | grep -c '"Health":"starting"' || true)"
+    if [ "$unhealthy" -gt 0 ]; then
+        "${compose[@]}" ps
+        exit 1
+    fi
+    if [ "$starting" -eq 0 ]; then
+        "${compose[@]}" ps
+        exit 0
+    fi
+    sleep 2
+done
+
+echo "Services did not become healthy in time" >&2
+"${compose[@]}" ps
+exit 1

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+readonly APP_DIR="/opt/avito-hunt"
+readonly ENV_FILE="/etc/avito-hunt/avito-hunt.env"
+readonly BACKUP_DIR="/var/backups/avito-hunt"
+
+install -d -m 700 "$BACKUP_DIR"
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+partial="$BACKUP_DIR/postgres-$timestamp.sql.gz.partial"
+final="${partial%.partial}"
+
+docker compose --env-file "$ENV_FILE" --project-directory "$APP_DIR" \
+    -f "$APP_DIR/compose.yaml" exec -T database \
+    sh -eu -c 'pg_dump --clean --if-exists --no-owner -U "$POSTGRES_USER" "$POSTGRES_DB"' \
+    | gzip -9 > "$partial"
+gzip -t "$partial"
+mv "$partial" "$final"
+find "$BACKUP_DIR" -type f -name 'postgres-*.sql.gz' -mtime +14 -delete
+echo "$final"

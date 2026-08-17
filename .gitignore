@@ -8,6 +8,7 @@
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 .pytest_cache/
 .mypy_cache/
@@ -19,6 +20,7 @@ node_modules/
 # Runtime data
 data/
 logs/
+work/
 *.db
 *.sqlite*
 
@@ -26,4 +28,3 @@ logs/
 .DS_Store
 .idea/
 .vscode/
-

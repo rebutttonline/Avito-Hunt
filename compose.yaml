@@ -1,0 +1,67 @@
+name: avito-hunt
+
+x-app: &app
+  build:
+    context: .
+  environment:
+    APP_ENV: ${APP_ENV:-production}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    DATABASE_URL: postgresql://${POSTGRES_USER:-avito_hunt}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-avito_hunt}
+    SOURCE_JSON_URL: ${SOURCE_JSON_URL:-}
+    SOURCE_POLL_SECONDS: ${SOURCE_POLL_SECONDS:-60}
+    DEAL_DISCOUNT_PERCENT: ${DEAL_DISCOUNT_PERCENT:-15}
+    MIN_COMPARABLE_LISTINGS: ${MIN_COMPARABLE_LISTINGS:-10}
+    COMPARABLE_MAX_AGE_DAYS: ${COMPARABLE_MAX_AGE_DAYS:-30}
+  depends_on:
+    database:
+      condition: service_healthy
+  restart: unless-stopped
+  user: "1000:1000"
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  mem_limit: 256m
+  healthcheck:
+    test: ["CMD", "python", "-m", "avito_hunt.healthcheck"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 20s
+
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-avito_hunt}
+      POSTGRES_USER: ${POSTGRES_USER:-avito_hunt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: 512m
+    shm_size: 128m
+    security_opt:
+      - no-new-privileges:true
+
+  bot:
+    <<: *app
+    command: ["python", "-m", "avito_hunt.bot_service"]
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "avito_hunt.worker_service"]
+
+volumes:
+  postgres_data:
+    name: avito-hunt-postgres
