@@ -1,16 +1,17 @@
 import asyncio
 import logging
+from contextlib import suppress
 from decimal import Decimal
 
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
     Message,
-    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 
 from avito_hunt.config import get_settings
@@ -28,7 +29,7 @@ from avito_hunt.preferences import (
 logger = logging.getLogger(__name__)
 router = Router()
 database: Database
-waiting_for_region: set[int] = set()
+waiting_for_region: dict[int, int] = {}
 
 REGIONS = {
     "moscow": "москва",
@@ -39,15 +40,26 @@ REGIONS = {
 }
 
 
-def main_keyboard(enabled: bool) -> ReplyKeyboardMarkup:
-    toggle = "⏸ Пауза" if enabled else "▶️ Продолжить"
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text=toggle)],
-            [KeyboardButton(text="📊 Статус")],
-        ],
-        resize_keyboard=True,
-        input_field_placeholder="Выберите действие",
+def panel_text(preferences: UserPreferences) -> str:
+    state = "включены ✅" if preferences.enabled else "приостановлены ⏸"
+    return (
+        "🏹 <b>Avito Hunt</b>\n\n"
+        f"Уведомления: <b>{state}</b>\n"
+        "Я проверяю новые объявления iPhone и показываю предложения заметно ниже рынка.\n\n"
+        "Используйте кнопки под этим сообщением — панель будет обновляться без новых сообщений."
+    )
+
+
+def panel_keyboard(enabled: bool) -> InlineKeyboardMarkup:
+    toggle_text = "⏸ Приостановить" if enabled else "▶️ Продолжить"
+    toggle_data = "panel:pause" if enabled else "panel:resume"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings:root")],
+            [InlineKeyboardButton(text=toggle_text, callback_data=toggle_data)],
+            [InlineKeyboardButton(text="📊 Статус", callback_data="panel:status")],
+            [InlineKeyboardButton(text="❓ Помощь", callback_data="panel:help")],
+        ]
     )
 
 
@@ -58,7 +70,7 @@ def settings_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="💾 Объём памяти", callback_data="settings:storage")],
             [InlineKeyboardButton(text="📍 Регион", callback_data="settings:region")],
             [InlineKeyboardButton(text="📉 Минимальная скидка", callback_data="settings:discount")],
-            [InlineKeyboardButton(text="✅ Готово", callback_data="settings:close")],
+            [InlineKeyboardButton(text="← Назад", callback_data="panel:root")],
         ]
     )
 
@@ -160,6 +172,22 @@ def settings_text(preferences: UserPreferences) -> str:
     )
 
 
+def help_text() -> str:
+    return (
+        "❓ <b>Как работает Avito Hunt</b>\n\n"
+        "Бот сравнивает новый iPhone с похожими объявлениями той же модели, памяти, "
+        "состояния и региона. Если цена ниже выбранного порога, вы получаете уведомление.\n\n"
+        "Низкая цена не гарантирует исправность устройства — проверяйте товар и не "
+        "переводите предоплату."
+    )
+
+
+def back_keyboard(callback_data: str = "panel:root") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="← Назад", callback_data=callback_data)]]
+    )
+
+
 async def get_preferences(message: Message) -> UserPreferences:
     assert message.from_user
     preferences = await database.get_user_preferences(message.chat.id)
@@ -171,18 +199,28 @@ async def get_preferences(message: Message) -> UserPreferences:
     return created
 
 
+async def send_panel(
+    message: Message,
+    preferences: UserPreferences,
+    *,
+    text: str | None = None,
+    markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    panel = await message.answer(
+        text or panel_text(preferences),
+        parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await panel.edit_reply_markup(reply_markup=markup or panel_keyboard(preferences.enabled))
+
+
 @router.message(Command("start"))
 async def start(message: Message) -> None:
     assert message.from_user
     await database.register_user(message.chat.id, message.from_user.username)
-    await message.answer(
-        "<b>Avito Hunt включён ✅</b>\n\n"
-        "Я отслеживаю все поддерживаемые модели iPhone и пришлю уведомление, когда "
-        "объявление окажется заметно дешевле сопоставимых предложений.\n\n"
-        "Настройки можно изменить кнопкой ниже.",
-        parse_mode="HTML",
-        reply_markup=main_keyboard(True),
-    )
+    preferences = await database.get_user_preferences(message.chat.id)
+    assert preferences
+    await send_panel(message, preferences)
 
 
 @router.message(Command("stop"))
@@ -190,10 +228,9 @@ async def start(message: Message) -> None:
 async def pause(message: Message) -> None:
     await get_preferences(message)
     await database.disable_user(message.chat.id)
-    await message.answer(
-        "Уведомления приостановлены ⏸\nНастройки сохранены.",
-        reply_markup=main_keyboard(False),
-    )
+    preferences = await database.get_user_preferences(message.chat.id)
+    assert preferences
+    await send_panel(message, preferences)
 
 
 @router.message(Command("resume"))
@@ -201,20 +238,20 @@ async def pause(message: Message) -> None:
 async def resume(message: Message) -> None:
     await get_preferences(message)
     await database.enable_user(message.chat.id)
-    await message.answer(
-        "Уведомления снова включены ✅",
-        reply_markup=main_keyboard(True),
-    )
+    preferences = await database.get_user_preferences(message.chat.id)
+    assert preferences
+    await send_panel(message, preferences)
 
 
 @router.message(Command("status"))
 @router.message(F.text == "📊 Статус")
 async def status(message: Message) -> None:
     preferences = await get_preferences(message)
-    await message.answer(
-        settings_text(preferences),
-        parse_mode="HTML",
-        reply_markup=main_keyboard(preferences.enabled),
+    await send_panel(
+        message,
+        preferences,
+        text="📊 <b>Текущий статус</b>\n\n" + settings_text(preferences),
+        markup=back_keyboard(),
     )
 
 
@@ -222,30 +259,72 @@ async def status(message: Message) -> None:
 @router.message(F.text == "⚙️ Настройки")
 async def show_settings(message: Message) -> None:
     preferences = await get_preferences(message)
-    await message.answer(
-        settings_text(preferences),
-        parse_mode="HTML",
-        reply_markup=settings_keyboard(),
+    await send_panel(
+        message,
+        preferences,
+        text=settings_text(preferences),
+        markup=settings_keyboard(),
     )
 
 
 @router.message(Command("help"))
 async def help_command(message: Message) -> None:
     preferences = await get_preferences(message)
-    await message.answer(
-        "Используйте кнопки внизу экрана.\n\n"
-        "⚙️ Настройки — модели, память, регион и скидка\n"
-        "⏸ Пауза — временно остановить уведомления\n"
-        "▶️ Продолжить — снова включить их\n"
-        "📊 Статус — показать текущие параметры",
-        reply_markup=main_keyboard(preferences.enabled),
-    )
+    await send_panel(message, preferences, text=help_text(), markup=back_keyboard())
 
 
 async def edit_callback(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup) -> None:
     await callback.answer()
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
+        try:
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
+        except TelegramBadRequest as error:
+            if "message is not modified" not in str(error):
+                raise
+
+
+@router.callback_query(F.data == "panel:root")
+async def panel_root(callback: CallbackQuery) -> None:
+    waiting_for_region.pop(callback.from_user.id, None)
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if preferences:
+        await edit_callback(callback, panel_text(preferences), panel_keyboard(preferences.enabled))
+
+
+@router.callback_query(F.data == "panel:pause")
+async def panel_pause(callback: CallbackQuery) -> None:
+    await database.disable_user(callback.from_user.id)
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if preferences:
+        await edit_callback(callback, panel_text(preferences), panel_keyboard(False))
+
+
+@router.callback_query(F.data == "panel:resume")
+async def panel_resume(callback: CallbackQuery) -> None:
+    await database.enable_user(callback.from_user.id)
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if preferences:
+        await edit_callback(callback, panel_text(preferences), panel_keyboard(True))
+
+
+@router.callback_query(F.data == "panel:status")
+async def panel_status(callback: CallbackQuery) -> None:
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if preferences:
+        await edit_callback(
+            callback,
+            "📊 <b>Текущий статус</b>\n\n" + settings_text(preferences),
+            back_keyboard(),
+        )
+
+
+@router.callback_query(F.data == "panel:help")
+async def panel_help(callback: CallbackQuery) -> None:
+    await edit_callback(
+        callback,
+        help_text(),
+        back_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "settings:root")
@@ -327,6 +406,7 @@ async def update_storage(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "settings:region")
 async def settings_region(callback: CallbackQuery) -> None:
+    waiting_for_region.pop(callback.from_user.id, None)
     preferences = await database.get_user_preferences(callback.from_user.id)
     if preferences:
         current = preferences.region.title() if preferences.region else "любой"
@@ -343,10 +423,28 @@ async def update_region(callback: CallbackQuery) -> None:
         return
     value = callback.data.split(":", 1)[1]
     if value == "custom":
-        waiting_for_region.add(callback.from_user.id)
-        await callback.answer()
         if isinstance(callback.message, Message):
-            await callback.message.answer("Напишите название города одним сообщением.")
+            waiting_for_region[callback.from_user.id] = callback.message.message_id
+        await edit_callback(
+            callback,
+            "✍️ <b>Другой город</b>\n\nНапишите название города одним сообщением.",
+            InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="← Назад", callback_data="region:cancel")]
+                ]
+            ),
+        )
+        return
+    if value == "cancel":
+        waiting_for_region.pop(callback.from_user.id, None)
+        preferences = await database.get_user_preferences(callback.from_user.id)
+        if preferences:
+            current = preferences.region.title() if preferences.region else "любой"
+            await edit_callback(
+                callback,
+                f"📍 <b>В каком регионе искать?</b>\n\nСейчас: {current}",
+                region_keyboard(preferences.region),
+            )
         return
     region = None if value == "all" else REGIONS.get(value)
     await database.set_region(callback.from_user.id, region)
@@ -365,16 +463,30 @@ def is_waiting_for_region(message: Message) -> bool:
 @router.message(is_waiting_for_region)
 async def custom_region(message: Message) -> None:
     value = (message.text or "").strip()
+    panel_message_id = waiting_for_region[message.chat.id]
     if not 2 <= len(value) <= 80:
-        await message.answer("Введите название города длиной от 2 до 80 символов.")
+        await message.bot.edit_message_text(
+            "⚠️ Название должно содержать от 2 до 80 символов.\n\nНапишите город ещё раз.",
+            chat_id=message.chat.id,
+            message_id=panel_message_id,
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="← Назад", callback_data="region:cancel")]
+                ]
+            ),
+        )
         return
-    waiting_for_region.discard(message.chat.id)
+    waiting_for_region.pop(message.chat.id, None)
     await database.set_region(message.chat.id, value)
-    preferences = await database.get_user_preferences(message.chat.id)
-    await message.answer(
-        f"Регион сохранён: {value.title()} ✅",
-        reply_markup=main_keyboard(bool(preferences and preferences.enabled)),
+    await message.bot.edit_message_text(
+        f"📍 <b>В каком регионе искать?</b>\n\nСейчас: {value.title()} ✅",
+        chat_id=message.chat.id,
+        message_id=panel_message_id,
+        parse_mode="HTML",
+        reply_markup=region_keyboard(value.casefold()),
     )
+    with suppress(TelegramBadRequest):
+        await message.delete()
 
 
 @router.callback_query(F.data == "settings:discount")
@@ -405,16 +517,8 @@ async def update_discount(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "settings:close")
 async def settings_close(callback: CallbackQuery) -> None:
     preferences = await database.get_user_preferences(callback.from_user.id)
-    await callback.answer("Настройки сохранены")
-    if isinstance(callback.message, Message) and preferences:
-        await callback.message.edit_text(
-            "Настройки сохранены ✅\n\n" + settings_text(preferences),
-            parse_mode="HTML",
-        )
-        await callback.message.answer(
-            "Управление ботом:",
-            reply_markup=main_keyboard(preferences.enabled),
-        )
+    if preferences:
+        await edit_callback(callback, panel_text(preferences), panel_keyboard(preferences.enabled))
 
 
 async def run() -> None:
