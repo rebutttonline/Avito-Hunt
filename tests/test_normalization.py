@@ -44,3 +44,17 @@ def test_builds_listing_from_valid_payload() -> None:
     assert listing.storage_gb == 256
     assert listing.condition == "used"
     assert listing.region == "москва"
+
+
+def test_normalizes_provider_listing_status() -> None:
+    listing = listing_from_payload(
+        {
+            "id": "gone",
+            "title": "iPhone 15 Pro 256GB",
+            "price": 65000,
+            "url": "https://example.test/gone",
+            "status": "removed",
+        }
+    )
+    assert listing is not None
+    assert listing.status == "removed"

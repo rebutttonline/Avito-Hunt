@@ -1,11 +1,13 @@
 import logging
 from collections import Counter
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from avito_hunt.domain import Listing
 from avito_hunt.normalization import listing_from_payload
+from avito_hunt.provider import SourceBatch, validate_batch
 from avito_hunt.screening import rejection_reason
 
 logger = logging.getLogger(__name__)
@@ -18,7 +20,7 @@ class JsonFeedSource:
         self.url = url
         self.timeout = timeout
 
-    async def fetch(self) -> list[Listing]:
+    async def fetch(self) -> SourceBatch:
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             response = await client.get(self.url)
             response.raise_for_status()
@@ -43,4 +45,12 @@ class JsonFeedSource:
                 rejected["invalid_or_not_iphone"] += 1
         if rejected:
             logger.info("Filtered source listings: %s", dict(rejected))
-        return listings
+        batch = SourceBatch(
+            provider="json-feed",
+            listings=tuple(listings),
+            fetched_at=datetime.now(UTC),
+            received_count=len(items),
+            rejected_count=sum(rejected.values()),
+        )
+        validate_batch(batch)
+        return batch

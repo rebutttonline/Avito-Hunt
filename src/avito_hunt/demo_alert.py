@@ -9,6 +9,7 @@ from avito_hunt.config import get_settings
 from avito_hunt.database import Database
 from avito_hunt.domain import Listing
 from avito_hunt.logging import configure_logging
+from avito_hunt.provider import SourceBatch
 from avito_hunt.worker_service import process_once
 
 logger = logging.getLogger(__name__)
@@ -18,8 +19,13 @@ class DemoSource:
     def __init__(self, listings: list[Listing]) -> None:
         self.listings = listings
 
-    async def fetch(self) -> list[Listing]:
-        return self.listings
+    async def fetch(self) -> SourceBatch:
+        return SourceBatch(
+            provider="demo",
+            listings=tuple(self.listings),
+            fetched_at=datetime.now(UTC),
+            received_count=len(self.listings),
+        )
 
 
 def build_demo_listings(run_id: str) -> list[Listing]:

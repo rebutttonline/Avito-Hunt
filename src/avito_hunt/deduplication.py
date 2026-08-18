@@ -36,6 +36,10 @@ def relist_fingerprint(listing: Listing) -> str | None:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def feedback_key(external_id: str) -> str:
+    return hashlib.blake2s(external_id.encode(), digest_size=8).hexdigest()
+
+
 def _seller_identifier(raw: dict[str, Any]) -> str | None:
     for key in ("seller_id", "user_id", "owner_id", "sellerId", "userId"):
         value = str(raw.get(key) or "").strip()

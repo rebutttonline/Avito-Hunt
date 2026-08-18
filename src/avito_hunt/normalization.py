@@ -76,6 +76,8 @@ def listing_from_payload(payload: dict[str, Any]) -> Listing | None:
     if not external_id or not url.startswith(("https://", "http://")) or price <= 0:
         return None
 
+    raw_status = str(payload.get("status") or "active").strip().casefold()
+    status = raw_status if raw_status in {"active", "removed", "sold"} else "active"
     return Listing(
         external_id=external_id,
         title=title,
@@ -86,5 +88,6 @@ def listing_from_payload(payload: dict[str, Any]) -> Listing | None:
         condition=normalize_condition(payload.get("condition")),
         region=str(payload.get("region") or "unknown").strip().lower(),
         published_at=parse_datetime(payload.get("published_at")),
+        status=status,
         raw=payload,
     )

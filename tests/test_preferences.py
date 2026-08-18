@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from avito_hunt.domain import Listing, UserPreferences
-from avito_hunt.preferences import matches_preferences, model_generation
+from avito_hunt.preferences import is_quiet_time, matches_preferences, model_generation
 
 
 def listing(*, model: str = "iPhone 15 Pro", storage: int = 256) -> Listing:
@@ -52,3 +52,9 @@ def test_groups_x_family_and_16e() -> None:
     assert model_generation("iPhone XS Max") == "X"
     assert model_generation("iPhone XR") == "X"
     assert model_generation("iPhone 16e") == "16"
+
+
+def test_quiet_hours_can_cross_midnight() -> None:
+    preferences = UserPreferences(chat_id=1, quiet_start_hour=23, quiet_end_hour=8)
+    assert is_quiet_time(preferences, datetime(2026, 8, 18, 0, tzinfo=UTC))
+    assert not is_quiet_time(preferences, datetime(2026, 8, 18, 8, tzinfo=UTC))

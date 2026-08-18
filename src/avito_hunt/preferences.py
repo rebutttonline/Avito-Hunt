@@ -1,4 +1,6 @@
+from datetime import datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from avito_hunt.domain import Listing, UserPreferences
 
@@ -32,6 +34,25 @@ def matches_preferences(
     if preferences.storage_options and listing.storage_gb not in preferences.storage_options:
         return False
     return not preferences.region or listing.region.casefold() == preferences.region.casefold()
+
+
+def is_quiet_time(
+    preferences: UserPreferences,
+    now: datetime | None = None,
+) -> bool:
+    if preferences.quiet_start_hour is None or preferences.quiet_end_hour is None:
+        return False
+    local = now or datetime.now(ZoneInfo("Europe/Moscow"))
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+    hour = local.astimezone(ZoneInfo("Europe/Moscow")).hour
+    start = preferences.quiet_start_hour
+    end = preferences.quiet_end_hour
+    if start == end:
+        return True
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
 
 
 def format_models(values: tuple[str, ...]) -> str:

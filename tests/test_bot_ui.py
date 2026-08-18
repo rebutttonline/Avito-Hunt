@@ -31,6 +31,8 @@ def test_root_panel_uses_inline_navigation() -> None:
         "settings:root",
         "panel:pause",
         "panel:status",
+        "panel:demo",
+        "panel:invite",
         "panel:help",
     }
     assert "panel:resume" in callback_values(panel_keyboard(False))

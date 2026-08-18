@@ -1,12 +1,18 @@
 import json
+import secrets
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import asyncpg
 
-from avito_hunt.deduplication import canonical_url, is_specific_listing_url, relist_fingerprint
-from avito_hunt.domain import Listing, UserPreferences
+from avito_hunt.deduplication import (
+    canonical_url,
+    feedback_key,
+    is_specific_listing_url,
+    relist_fingerprint,
+)
+from avito_hunt.domain import Listing, ListingChange, ListingRecordResult, UserPreferences
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS users (
@@ -22,6 +28,16 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_options INTEGER[] NOT NULL DE
 ALTER TABLE users ADD COLUMN IF NOT EXISTS region TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS min_discount_percent NUMERIC(5, 1)
     NOT NULL DEFAULT 15.0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS quiet_start_hour INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS quiet_end_hour INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_alert_limit INTEGER NOT NULL DEFAULT 20;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_code TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by BIGINT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_invite_code_idx
+ON users (invite_code) WHERE invite_code IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS listings (
     external_id TEXT PRIMARY KEY,
@@ -41,6 +57,13 @@ CREATE TABLE IF NOT EXISTS listings (
 
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS canonical_url TEXT;
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS relist_fingerprint TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS feedback_key TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+
+CREATE UNIQUE INDEX IF NOT EXISTS listings_feedback_key_idx
+ON listings (feedback_key) WHERE feedback_key IS NOT NULL;
 
 UPDATE listings SET canonical_url = url WHERE canonical_url IS NULL;
 
@@ -59,6 +82,39 @@ CREATE TABLE IF NOT EXISTS notifications (
     external_id TEXT NOT NULL REFERENCES listings(external_id) ON DELETE CASCADE,
     sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (chat_id, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS notification_events (
+    chat_id BIGINT NOT NULL REFERENCES users(chat_id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL REFERENCES listings(external_id) ON DELETE CASCADE,
+    price INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (chat_id, external_id, price, event_type)
+);
+
+CREATE TABLE IF NOT EXISTS price_history (
+    external_id TEXT NOT NULL REFERENCES listings(external_id) ON DELETE CASCADE,
+    price INTEGER NOT NULL CHECK (price > 0),
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (external_id, observed_at)
+);
+
+CREATE INDEX IF NOT EXISTS price_history_lookup_idx
+ON price_history (external_id, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS listing_feedback (
+    chat_id BIGINT NOT NULL REFERENCES users(chat_id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL REFERENCES listings(external_id) ON DELETE CASCADE,
+    verdict TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (chat_id, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS system_state (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
 
@@ -80,18 +136,35 @@ class Database:
         async with self.pool.acquire() as connection:
             await connection.execute(SCHEMA_SQL)
 
-    async def register_user(self, chat_id: int, username: str | None) -> None:
+    async def register_user(
+        self,
+        chat_id: int,
+        username: str | None,
+        referral_code: str | None = None,
+    ) -> None:
         assert self.pool
-        await self.pool.execute(
-            """
-            INSERT INTO users (chat_id, username, enabled)
-            VALUES ($1, $2, TRUE)
-            ON CONFLICT (chat_id) DO UPDATE
-            SET username = EXCLUDED.username, enabled = TRUE, updated_at = NOW()
-            """,
-            chat_id,
-            username,
-        )
+        async with self.pool.acquire() as connection, connection.transaction():
+            invited_by = None
+            if referral_code:
+                invited_by = await connection.fetchval(
+                    "SELECT chat_id FROM users WHERE invite_code = $1",
+                    referral_code,
+                )
+            await connection.execute(
+                """
+                INSERT INTO users (
+                    chat_id, username, enabled, onboarding_completed,
+                    invite_code, invited_by
+                )
+                VALUES ($1, $2, TRUE, FALSE, $3, $4)
+                ON CONFLICT (chat_id) DO UPDATE
+                SET username = EXCLUDED.username, enabled = TRUE, updated_at = NOW()
+                """,
+                chat_id,
+                username,
+                secrets.token_urlsafe(6),
+                invited_by,
+            )
 
     async def disable_user(self, chat_id: int) -> None:
         assert self.pool
@@ -120,7 +193,8 @@ class Database:
         row = await self.pool.fetchrow(
             """
             SELECT chat_id, enabled, model_generations, storage_options, region,
-                   min_discount_percent
+                   min_discount_percent, quiet_start_hour, quiet_end_hour,
+                   daily_alert_limit, onboarding_completed, is_admin
             FROM users WHERE chat_id = $1
             """,
             chat_id,
@@ -132,7 +206,8 @@ class Database:
         rows = await self.pool.fetch(
             """
             SELECT chat_id, enabled, model_generations, storage_options, region,
-                   min_discount_percent
+                   min_discount_percent, quiet_start_hour, quiet_end_hour,
+                   daily_alert_limit, onboarding_completed, is_admin
             FROM users WHERE enabled = TRUE
             """
         )
@@ -163,6 +238,42 @@ class Database:
             value,
         )
 
+    async def set_quiet_hours(
+        self,
+        chat_id: int,
+        start_hour: int | None,
+        end_hour: int | None,
+    ) -> None:
+        assert self.pool
+        await self.pool.execute(
+            """
+            UPDATE users
+            SET quiet_start_hour = $2, quiet_end_hour = $3, updated_at = NOW()
+            WHERE chat_id = $1
+            """,
+            chat_id,
+            start_hour,
+            end_hour,
+        )
+
+    async def set_daily_alert_limit(self, chat_id: int, value: int) -> None:
+        assert self.pool
+        await self.pool.execute(
+            """
+            UPDATE users SET daily_alert_limit = $2, updated_at = NOW()
+            WHERE chat_id = $1
+            """,
+            chat_id,
+            value,
+        )
+
+    async def complete_onboarding(self, chat_id: int) -> None:
+        assert self.pool
+        await self.pool.execute(
+            "UPDATE users SET onboarding_completed = TRUE WHERE chat_id = $1",
+            chat_id,
+        )
+
     async def _update_array(self, chat_id: int, column: str, values: list[object]) -> None:
         assert self.pool
         allowed = {"model_generations", "storage_options"}
@@ -183,18 +294,67 @@ class Database:
             storage_options=tuple(row["storage_options"] or ()),
             region=row["region"],
             min_discount_percent=Decimal(row["min_discount_percent"]),
+            quiet_start_hour=row["quiet_start_hour"],
+            quiet_end_hour=row["quiet_end_hour"],
+            daily_alert_limit=row["daily_alert_limit"],
+            onboarding_completed=row["onboarding_completed"],
+            is_admin=row["is_admin"],
         )
 
     async def insert_listing(self, listing: Listing) -> bool:
+        result = await self.record_listing(listing)
+        return result.change is ListingChange.NEW
+
+    async def record_listing(self, listing: Listing) -> ListingRecordResult:
         assert self.pool
         canonical = canonical_url(listing.url)
         fingerprint = relist_fingerprint(listing)
         async with self.pool.acquire() as connection, connection.transaction():
+            existing = await connection.fetchrow(
+                "SELECT price FROM listings WHERE external_id = $1 FOR UPDATE",
+                listing.external_id,
+            )
+            if existing:
+                previous_price = existing["price"]
+                change = ListingChange.UNCHANGED
+                if listing.price < previous_price:
+                    change = ListingChange.PRICE_DROPPED
+                elif listing.price > previous_price:
+                    change = ListingChange.PRICE_INCREASED
+                await connection.execute(
+                    """
+                    UPDATE listings
+                    SET title = $2, url = $3, price = $4, model = $5,
+                        storage_gb = $6, condition = $7, region = $8,
+                        published_at = $9, last_seen_at = NOW(), updated_at = NOW(),
+                        status = $10, raw = $11::jsonb
+                    WHERE external_id = $1
+                    """,
+                    listing.external_id,
+                    listing.title,
+                    listing.url,
+                    listing.price,
+                    listing.model,
+                    listing.storage_gb,
+                    listing.condition,
+                    listing.region,
+                    listing.published_at,
+                    listing.status,
+                    json.dumps(listing.raw, ensure_ascii=False),
+                )
+                if change is not ListingChange.UNCHANGED:
+                    await connection.execute(
+                        "INSERT INTO price_history (external_id, price) VALUES ($1, $2)",
+                        listing.external_id,
+                        listing.price,
+                    )
+                return ListingRecordResult(change=change, previous_price=previous_price)
+
             if is_specific_listing_url(canonical) and await connection.fetchval(
                 "SELECT EXISTS(SELECT 1 FROM listings WHERE canonical_url = $1)",
                 canonical,
             ):
-                return False
+                return ListingRecordResult(change=ListingChange.DUPLICATE)
             if fingerprint and await connection.fetchval(
                 """
                 SELECT EXISTS(
@@ -205,14 +365,16 @@ class Database:
                 """,
                 fingerprint,
             ):
-                return False
+                return ListingRecordResult(change=ListingChange.DUPLICATE)
             result = await connection.execute(
                 """
                 INSERT INTO listings (
                     external_id, title, url, price, model, storage_gb,
                     condition, region, published_at, canonical_url,
-                    relist_fingerprint, raw
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+                    relist_fingerprint, feedback_key, status, raw
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb
+                )
                 ON CONFLICT DO NOTHING
                 """,
                 listing.external_id,
@@ -226,9 +388,18 @@ class Database:
                 listing.published_at,
                 canonical,
                 fingerprint,
+                feedback_key(listing.external_id),
+                listing.status,
                 json.dumps(listing.raw, ensure_ascii=False),
             )
-        return result == "INSERT 0 1"
+            if result != "INSERT 0 1":
+                return ListingRecordResult(change=ListingChange.DUPLICATE)
+            await connection.execute(
+                "INSERT INTO price_history (external_id, price) VALUES ($1, $2)",
+                listing.external_id,
+                listing.price,
+            )
+            return ListingRecordResult(change=ListingChange.NEW)
 
     async def comparable_prices(
         self,
@@ -245,6 +416,7 @@ class Database:
               AND storage_gb IS NOT DISTINCT FROM $3
               AND condition = $4
               AND region = $5
+              AND status = 'active'
               AND published_at >= NOW() - $6::interval
             """,
             listing.external_id,
@@ -281,3 +453,170 @@ class Database:
             external_id,
         )
         return bool(value)
+
+    async def notification_event_exists(
+        self,
+        chat_id: int,
+        external_id: str,
+        price: int,
+        event_type: str,
+    ) -> bool:
+        assert self.pool
+        value = await self.pool.fetchval(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM notification_events
+                WHERE chat_id = $1 AND external_id = $2
+                  AND price = $3 AND event_type = $4
+            )
+            """,
+            chat_id,
+            external_id,
+            price,
+            event_type,
+        )
+        return bool(value)
+
+    async def mark_notification_event(
+        self,
+        chat_id: int,
+        external_id: str,
+        price: int,
+        event_type: str,
+    ) -> bool:
+        assert self.pool
+        result = await self.pool.execute(
+            """
+            INSERT INTO notification_events (chat_id, external_id, price, event_type)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT DO NOTHING
+            """,
+            chat_id,
+            external_id,
+            price,
+            event_type,
+        )
+        return result == "INSERT 0 1"
+
+    async def notifications_today(self, chat_id: int) -> int:
+        assert self.pool
+        return int(
+            await self.pool.fetchval(
+                """
+                SELECT COUNT(*) FROM notification_events
+                WHERE chat_id = $1
+                  AND sent_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Moscow')
+                      AT TIME ZONE 'Europe/Moscow'
+                """,
+                chat_id,
+            )
+        )
+
+    async def add_feedback(self, chat_id: int, key: str, verdict: str) -> bool:
+        assert self.pool
+        result = await self.pool.execute(
+            """
+            INSERT INTO listing_feedback (chat_id, external_id, verdict)
+            SELECT $1, external_id, $3 FROM listings WHERE feedback_key = $2
+            ON CONFLICT (chat_id, external_id) DO UPDATE
+            SET verdict = EXCLUDED.verdict, created_at = NOW()
+            """,
+            chat_id,
+            key,
+            verdict,
+        )
+        return result in {"INSERT 0 1", "UPDATE 1"}
+
+    async def set_system_state(self, key: str, value: dict[str, object]) -> None:
+        assert self.pool
+        await self.pool.execute(
+            """
+            INSERT INTO system_state (key, value) VALUES ($1, $2::jsonb)
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = NOW()
+            """,
+            key,
+            json.dumps(value, ensure_ascii=False),
+        )
+
+    async def get_system_state(self, key: str) -> dict[str, object] | None:
+        assert self.pool
+        value = await self.pool.fetchval("SELECT value FROM system_state WHERE key = $1", key)
+        return dict(value) if value else None
+
+    async def admin_chat_ids(self) -> list[int]:
+        assert self.pool
+        rows = await self.pool.fetch("SELECT chat_id FROM users WHERE is_admin = TRUE")
+        return [row["chat_id"] for row in rows]
+
+    async def admin_stats(self) -> dict[str, object]:
+        assert self.pool
+        row = await self.pool.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM users) AS users,
+                (SELECT COUNT(*) FROM users WHERE enabled = TRUE) AS enabled_users,
+                (SELECT COUNT(*) FROM listings) AS listings,
+                (SELECT COUNT(*) FROM notification_events) AS notifications,
+                (SELECT COUNT(*) FROM listing_feedback) AS feedback
+            """
+        )
+        source = await self.get_system_state("source")
+        return {
+            "users": row["users"],
+            "enabled_users": row["enabled_users"],
+            "listings": row["listings"],
+            "notifications": row["notifications"],
+            "feedback": row["feedback"],
+            "source": source or {"status": "unknown"},
+        }
+
+    async def invite_code(self, chat_id: int) -> str | None:
+        assert self.pool
+        return await self.pool.fetchval("SELECT invite_code FROM users WHERE chat_id = $1", chat_id)
+
+    async def delete_user(self, chat_id: int) -> None:
+        assert self.pool
+        await self.pool.execute("DELETE FROM users WHERE chat_id = $1", chat_id)
+
+    async def mark_listing_status(self, external_id: str, status: str) -> None:
+        assert self.pool
+        await self.pool.execute(
+            """
+            UPDATE listings SET status = $2, updated_at = NOW()
+            WHERE external_id = $1
+            """,
+            external_id,
+            status,
+        )
+
+    async def price_history(self, external_id: str) -> list[tuple[datetime, int]]:
+        assert self.pool
+        rows = await self.pool.fetch(
+            """
+            SELECT observed_at, price FROM price_history
+            WHERE external_id = $1 ORDER BY observed_at
+            """,
+            external_id,
+        )
+        return [(row["observed_at"], row["price"]) for row in rows]
+
+    async def cleanup_expired_data(self, *, retention_days: int = 180) -> dict[str, int]:
+        """Remove expired per-user events while retaining aggregate listing knowledge."""
+        assert self.pool
+        if retention_days < 30:
+            raise ValueError("retention_days must be at least 30")
+        deleted: dict[str, int] = {}
+        interval = timedelta(days=retention_days)
+        async with self.pool.acquire() as connection, connection.transaction():
+            for table, timestamp in (
+                ("notification_events", "sent_at"),
+                ("listing_feedback", "created_at"),
+                ("price_history", "observed_at"),
+            ):
+                result = await connection.execute(
+                    f"DELETE FROM {table} WHERE {timestamp} < NOW() - $1::interval",
+                    interval,
+                )
+                deleted[table] = int(result.rsplit(" ", 1)[-1])
+        return deleted

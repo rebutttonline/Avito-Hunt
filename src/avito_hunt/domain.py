@@ -16,6 +16,7 @@ class Listing:
     condition: str
     region: str
     published_at: datetime
+    status: str = "active"
     raw: dict[str, Any] = field(default_factory=dict, compare=False)
 
 
@@ -24,6 +25,33 @@ class PriceLevel(StrEnum):
     DEAL = "deal"
     GREAT_DEAL = "great_deal"
     SUSPICIOUSLY_CHEAP = "suspiciously_cheap"
+
+
+class RiskLevel(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+@dataclass(frozen=True, slots=True)
+class RiskAssessment:
+    level: RiskLevel
+    score: int
+    issues: tuple[str, ...] = ()
+
+
+class ListingChange(StrEnum):
+    NEW = "new"
+    PRICE_DROPPED = "price_dropped"
+    PRICE_INCREASED = "price_increased"
+    UNCHANGED = "unchanged"
+    DUPLICATE = "duplicate"
+
+
+@dataclass(frozen=True, slots=True)
+class ListingRecordResult:
+    change: ListingChange
+    previous_price: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +75,11 @@ class UserPreferences:
     storage_options: tuple[int, ...] = ()
     region: str | None = None
     min_discount_percent: Decimal = Decimal("15.0")
+    quiet_start_hour: int | None = None
+    quiet_end_hour: int | None = None
+    daily_alert_limit: int = 20
+    onboarding_completed: bool = True
+    is_admin: bool = False
 
     @property
     def tracks_all_models(self) -> bool:

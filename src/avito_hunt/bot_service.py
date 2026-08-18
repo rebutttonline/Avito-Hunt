@@ -1,7 +1,9 @@
 import asyncio
 import logging
 from contextlib import suppress
+from datetime import datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -17,6 +19,7 @@ from avito_hunt.config import get_settings
 from avito_hunt.database import Database
 from avito_hunt.domain import UserPreferences
 from avito_hunt.logging import configure_logging
+from avito_hunt.messages import deal_message
 from avito_hunt.preferences import (
     MODEL_GENERATIONS,
     STORAGE_OPTIONS,
@@ -24,6 +27,7 @@ from avito_hunt.preferences import (
     format_models,
     format_storage,
 )
+from avito_hunt.simulator import demo_estimate
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -49,17 +53,20 @@ def panel_text(preferences: UserPreferences) -> str:
     )
 
 
-def panel_keyboard(enabled: bool) -> InlineKeyboardMarkup:
+def panel_keyboard(enabled: bool, is_admin: bool = False) -> InlineKeyboardMarkup:
     toggle_text = "⏸ Приостановить" if enabled else "▶️ Продолжить"
     toggle_data = "panel:pause" if enabled else "panel:resume"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings:root")],
-            [InlineKeyboardButton(text=toggle_text, callback_data=toggle_data)],
-            [InlineKeyboardButton(text="📊 Статус", callback_data="panel:status")],
-            [InlineKeyboardButton(text="❓ Помощь", callback_data="panel:help")],
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings:root")],
+        [InlineKeyboardButton(text=toggle_text, callback_data=toggle_data)],
+        [InlineKeyboardButton(text="📊 Статус", callback_data="panel:status")],
+        [InlineKeyboardButton(text="🧪 Демонстрация", callback_data="panel:demo")],
+        [InlineKeyboardButton(text="👥 Пригласить", callback_data="panel:invite")],
+        [InlineKeyboardButton(text="❓ Помощь", callback_data="panel:help")],
+    ]
+    if is_admin:
+        rows.insert(-1, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def settings_keyboard() -> InlineKeyboardMarkup:
@@ -69,6 +76,8 @@ def settings_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="💾 Объём памяти", callback_data="settings:storage")],
             [InlineKeyboardButton(text="📍 Регион", callback_data="settings:region")],
             [InlineKeyboardButton(text="📉 Минимальная скидка", callback_data="settings:discount")],
+            [InlineKeyboardButton(text="🌙 Тихие часы", callback_data="settings:quiet")],
+            [InlineKeyboardButton(text="🔔 Лимит в день", callback_data="settings:limit")],
             [InlineKeyboardButton(text="← Назад", callback_data="panel:root")],
         ]
     )
@@ -156,9 +165,62 @@ def discount_keyboard(current: Decimal) -> InlineKeyboardMarkup:
     )
 
 
+def quiet_keyboard(start: int | None, end: int | None) -> InlineKeyboardMarkup:
+    values = (
+        ("off", None, None, "Выключены"),
+        ("23-8", 23, 8, "23:00–08:00"),
+        ("22-9", 22, 9, "22:00–09:00"),
+        ("0-8", 0, 8, "00:00–08:00"),
+    )
+    rows = []
+    for key, option_start, option_end, label in values:
+        selected = start == option_start and end == option_end
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{'✅ ' if selected else ''}{label}",
+                    callback_data=f"quiet:{key}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="settings:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def limit_keyboard(current: int) -> InlineKeyboardMarkup:
+    values = ((5, "5"), (10, "10"), (20, "20"), (50, "50"), (0, "Без лимита"))
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{'✅ ' if current == value else ''}{label}",
+                    callback_data=f"limit:{value}",
+                )
+                for value, label in values[:3]
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"{'✅ ' if current == value else ''}{label}",
+                    callback_data=f"limit:{value}",
+                )
+                for value, label in values[3:]
+            ],
+            [InlineKeyboardButton(text="← Назад", callback_data="settings:root")],
+        ]
+    )
+
+
 def settings_text(preferences: UserPreferences) -> str:
     region = preferences.region.title() if preferences.region else "любой"
     state = "работают ✅" if preferences.enabled else "на паузе ⏸"
+    quiet = (
+        "выключены"
+        if preferences.quiet_start_hour is None
+        else f"{preferences.quiet_start_hour:02d}:00–{preferences.quiet_end_hour:02d}:00 МСК"
+    )
+    limit = (
+        "без лимита" if preferences.daily_alert_limit == 0 else str(preferences.daily_alert_limit)
+    )
     return (
         "⚙️ <b>Настройки Avito Hunt</b>\n\n"
         f"Уведомления: <b>{state}</b>\n"
@@ -166,6 +228,8 @@ def settings_text(preferences: UserPreferences) -> str:
         f"Память: <b>{format_storage(preferences.storage_options)}</b>\n"
         f"Регион: <b>{region}</b>\n"
         f"Минимальная скидка: <b>{format_discount(preferences.min_discount_percent)}</b>\n\n"
+        f"Тихие часы: <b>{quiet}</b>\n"
+        f"Лимит уведомлений: <b>{limit} в день</b>\n\n"
         "По умолчанию я проверяю все модели iPhone — так вы не пропустите неожиданно "
         "выгодное предложение. При желании поиск можно сузить."
     )
@@ -208,17 +272,55 @@ async def send_panel(
     await message.answer(
         text or panel_text(preferences),
         parse_mode="HTML",
-        reply_markup=markup or panel_keyboard(preferences.enabled),
+        reply_markup=markup or panel_keyboard(preferences.enabled, preferences.is_admin),
+    )
+
+
+def onboarding_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Начать охоту", callback_data="onboarding:start")],
+            [InlineKeyboardButton(text="🔒 Конфиденциальность", callback_data="legal:privacy")],
+        ]
     )
 
 
 @router.message(Command("start"))
 async def start(message: Message) -> None:
     assert message.from_user
-    await database.register_user(message.chat.id, message.from_user.username)
+    parts = (message.text or "").split(maxsplit=1)
+    referral_code = parts[1].strip() if len(parts) == 2 else None
+    await database.register_user(
+        message.chat.id,
+        message.from_user.username,
+        referral_code,
+    )
     preferences = await database.get_user_preferences(message.chat.id)
     assert preferences
+    if not preferences.onboarding_completed:
+        await message.answer(
+            "🏹 <b>Добро пожаловать в Avito Hunt</b>\n\n"
+            "Я сам оцениваю рынок iPhone по модели, памяти, состоянию и региону. "
+            "Если новое объявление заметно дешевле медианы, вы получите объяснимое "
+            "уведомление с оценкой риска.\n\n"
+            "По умолчанию включены все модели, любой регион и скидка от 15%.",
+            parse_mode="HTML",
+            reply_markup=onboarding_keyboard(),
+        )
+        return
     await send_panel(message, preferences)
+
+
+@router.callback_query(F.data == "onboarding:start")
+async def finish_onboarding(callback: CallbackQuery) -> None:
+    await database.complete_onboarding(callback.from_user.id)
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if preferences:
+        await edit_callback(
+            callback,
+            panel_text(preferences),
+            panel_keyboard(preferences.enabled, preferences.is_admin),
+        )
 
 
 @router.message(Command("stop"))
@@ -271,6 +373,56 @@ async def help_command(message: Message) -> None:
     await send_panel(message, preferences, text=help_text(), markup=back_keyboard())
 
 
+@router.message(Command("demo"))
+async def demo_command(message: Message) -> None:
+    preferences = await get_preferences(message)
+    listing, estimate = demo_estimate()
+    await send_panel(
+        message,
+        preferences,
+        text=deal_message(listing, estimate, demo=True),
+        markup=back_keyboard(),
+    )
+
+
+@router.message(Command("privacy"))
+async def privacy_command(message: Message) -> None:
+    preferences = await get_preferences(message)
+    await send_panel(message, preferences, text=privacy_text(), markup=back_keyboard())
+
+
+@router.message(Command("terms"))
+async def terms_command(message: Message) -> None:
+    preferences = await get_preferences(message)
+    await send_panel(message, preferences, text=terms_text(), markup=back_keyboard())
+
+
+@router.message(Command("delete_me"))
+async def delete_me_command(message: Message) -> None:
+    preferences = await get_preferences(message)
+    await send_panel(
+        message,
+        preferences,
+        text="⚠️ <b>Удалить данные?</b>\n\nНастройки, история уведомлений и отзывы будут удалены.",
+        markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="Удалить навсегда", callback_data="account:delete")],
+                [InlineKeyboardButton(text="← Отмена", callback_data="panel:root")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data == "account:delete")
+async def delete_account(callback: CallbackQuery) -> None:
+    await database.delete_user(callback.from_user.id)
+    await edit_callback(
+        callback,
+        "Ваши пользовательские данные удалены. Чтобы начать заново, отправьте /start.",
+        InlineKeyboardMarkup(inline_keyboard=[]),
+    )
+
+
 async def edit_callback(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup) -> None:
     await callback.answer()
     if isinstance(callback.message, Message):
@@ -286,7 +438,11 @@ async def panel_root(callback: CallbackQuery) -> None:
     waiting_for_region.pop(callback.from_user.id, None)
     preferences = await database.get_user_preferences(callback.from_user.id)
     if preferences:
-        await edit_callback(callback, panel_text(preferences), panel_keyboard(preferences.enabled))
+        await edit_callback(
+            callback,
+            panel_text(preferences),
+            panel_keyboard(preferences.enabled, preferences.is_admin),
+        )
 
 
 @router.callback_query(F.data == "panel:pause")
@@ -294,7 +450,9 @@ async def panel_pause(callback: CallbackQuery) -> None:
     await database.disable_user(callback.from_user.id)
     preferences = await database.get_user_preferences(callback.from_user.id)
     if preferences:
-        await edit_callback(callback, panel_text(preferences), panel_keyboard(False))
+        await edit_callback(
+            callback, panel_text(preferences), panel_keyboard(False, preferences.is_admin)
+        )
 
 
 @router.callback_query(F.data == "panel:resume")
@@ -302,7 +460,9 @@ async def panel_resume(callback: CallbackQuery) -> None:
     await database.enable_user(callback.from_user.id)
     preferences = await database.get_user_preferences(callback.from_user.id)
     if preferences:
-        await edit_callback(callback, panel_text(preferences), panel_keyboard(True))
+        await edit_callback(
+            callback, panel_text(preferences), panel_keyboard(True, preferences.is_admin)
+        )
 
 
 @router.callback_query(F.data == "panel:status")
@@ -323,6 +483,97 @@ async def panel_help(callback: CallbackQuery) -> None:
         help_text(),
         back_keyboard(),
     )
+
+
+@router.callback_query(F.data == "panel:demo")
+async def panel_demo(callback: CallbackQuery) -> None:
+    listing, estimate = demo_estimate()
+    await edit_callback(
+        callback,
+        deal_message(listing, estimate, demo=True),
+        back_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "panel:invite")
+async def panel_invite(callback: CallbackQuery) -> None:
+    code = await database.invite_code(callback.from_user.id)
+    bot_info = await callback.bot.get_me()
+    link = f"https://t.me/{bot_info.username}?start={code}"
+    await edit_callback(
+        callback,
+        "👥 <b>Приглашение в закрытый тест</b>\n\n"
+        "Отправьте другу персональную ссылку:\n"
+        f"<code>{link}</code>\n\n"
+        "Код нужен только для учёта первых тестировщиков.",
+        back_keyboard(),
+    )
+
+
+def privacy_text() -> str:
+    return (
+        "🔒 <b>Конфиденциальность</b>\n\n"
+        "Бот хранит Telegram ID, имя пользователя, настройки поиска, историю "
+        "отправленных уведомлений и ваши оценки предложений. Токены, переписка с "
+        "продавцами и платёжные данные не собираются.\n\n"
+        "Для удаления данных напишите /delete_me."
+    )
+
+
+def terms_text() -> str:
+    return (
+        "📄 <b>Условия использования</b>\n\n"
+        "Avito Hunt предоставляет аналитическую оценку, а не гарантию подлинности, "
+        "исправности или выгодности товара. Пользователь самостоятельно проверяет "
+        "продавца и устройство. Бот не участвует в оплате и сделке."
+    )
+
+
+@router.callback_query(F.data == "legal:privacy")
+async def legal_privacy(callback: CallbackQuery) -> None:
+    await edit_callback(callback, privacy_text(), back_keyboard())
+
+
+@router.callback_query(F.data.startswith("feedback:"))
+async def listing_feedback(callback: CallbackQuery) -> None:
+    if not callback.data:
+        return
+    _, verdict, key = callback.data.split(":", 2)
+    saved = await database.add_feedback(callback.from_user.id, key, verdict)
+    await callback.answer("Спасибо, оценка сохранена ✅" if saved else "Объявление не найдено")
+
+
+async def admin_text() -> str:
+    stats = await database.admin_stats()
+    source = stats["source"]
+    source_status = source.get("status", "unknown") if isinstance(source, dict) else "unknown"
+    return (
+        "🛠 <b>Админ-панель Avito Hunt</b>\n\n"
+        f"Пользователи: <b>{stats['users']}</b>\n"
+        f"Активные: <b>{stats['enabled_users']}</b>\n"
+        f"Объявления: <b>{stats['listings']}</b>\n"
+        f"Уведомления: <b>{stats['notifications']}</b>\n"
+        f"Отзывы: <b>{stats['feedback']}</b>\n"
+        f"Источник: <b>{source_status}</b>"
+    )
+
+
+def admin_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:root")],
+            [InlineKeyboardButton(text="← Назад", callback_data="panel:root")],
+        ]
+    )
+
+
+@router.callback_query(F.data == "admin:root")
+async def admin_root(callback: CallbackQuery) -> None:
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if not preferences or not preferences.is_admin:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await edit_callback(callback, await admin_text(), admin_keyboard())
 
 
 @router.callback_query(F.data == "settings:root")
@@ -512,11 +763,97 @@ async def update_discount(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(F.data == "settings:quiet")
+async def settings_quiet(callback: CallbackQuery) -> None:
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if preferences:
+        current = (
+            "выключены"
+            if preferences.quiet_start_hour is None
+            else f"{preferences.quiet_start_hour:02d}:00–{preferences.quiet_end_hour:02d}:00 МСК"
+        )
+        await edit_callback(
+            callback,
+            f"🌙 <b>Тихие часы</b>\n\nСейчас: {current}\n"
+            "В этот период новые уведомления не отправляются.",
+            quiet_keyboard(preferences.quiet_start_hour, preferences.quiet_end_hour),
+        )
+
+
+@router.callback_query(F.data.startswith("quiet:"))
+async def update_quiet(callback: CallbackQuery) -> None:
+    if not callback.data:
+        return
+    value = callback.data.split(":", 1)[1]
+    options = {"off": (None, None), "23-8": (23, 8), "22-9": (22, 9), "0-8": (0, 8)}
+    start_hour, end_hour = options[value]
+    await database.set_quiet_hours(callback.from_user.id, start_hour, end_hour)
+    current = "выключены" if start_hour is None else f"{start_hour:02d}:00–{end_hour:02d}:00 МСК"
+    await edit_callback(
+        callback,
+        f"🌙 <b>Тихие часы</b>\n\nСейчас: {current}",
+        quiet_keyboard(start_hour, end_hour),
+    )
+
+
+@router.callback_query(F.data == "settings:limit")
+async def settings_limit(callback: CallbackQuery) -> None:
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if preferences:
+        current = (
+            "без лимита"
+            if preferences.daily_alert_limit == 0
+            else f"{preferences.daily_alert_limit} в день"
+        )
+        await edit_callback(
+            callback,
+            f"🔔 <b>Лимит уведомлений</b>\n\nСейчас: {current}",
+            limit_keyboard(preferences.daily_alert_limit),
+        )
+
+
+@router.callback_query(F.data.startswith("limit:"))
+async def update_limit(callback: CallbackQuery) -> None:
+    if not callback.data:
+        return
+    value = int(callback.data.split(":", 1)[1])
+    await database.set_daily_alert_limit(callback.from_user.id, value)
+    current = "без лимита" if value == 0 else f"{value} в день"
+    await edit_callback(
+        callback,
+        f"🔔 <b>Лимит уведомлений</b>\n\nСейчас: {current}",
+        limit_keyboard(value),
+    )
+
+
 @router.callback_query(F.data == "settings:close")
 async def settings_close(callback: CallbackQuery) -> None:
     preferences = await database.get_user_preferences(callback.from_user.id)
     if preferences:
-        await edit_callback(callback, panel_text(preferences), panel_keyboard(preferences.enabled))
+        await edit_callback(
+            callback,
+            panel_text(preferences),
+            panel_keyboard(preferences.enabled, preferences.is_admin),
+        )
+
+
+async def daily_admin_report_loop(bot: Bot) -> None:
+    while True:
+        try:
+            now = datetime.now(ZoneInfo("Europe/Moscow"))
+            state = await database.get_system_state("daily_admin_report") or {}
+            if now.hour == 9 and state.get("date") != now.date().isoformat():
+                deleted = await database.cleanup_expired_data()
+                text = "☀️ <b>Ежедневная сводка</b>\n\n" + await admin_text()
+                for chat_id in await database.admin_chat_ids():
+                    await bot.send_message(chat_id, text, parse_mode="HTML")
+                await database.set_system_state(
+                    "daily_admin_report",
+                    {"date": now.date().isoformat(), "retention_cleanup": deleted},
+                )
+        except Exception:
+            logger.exception("Daily admin report failed")
+        await asyncio.sleep(300)
 
 
 async def run() -> None:
@@ -533,12 +870,16 @@ async def run() -> None:
             await asyncio.sleep(3600)
 
     bot = Bot(settings.bot_token)
+    report_task = asyncio.create_task(daily_admin_report_loop(bot))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     try:
         logger.info("Starting Telegram long polling")
         await dispatcher.start_polling(bot)
     finally:
+        report_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await report_task
         await bot.session.close()
         await database.close()
 
