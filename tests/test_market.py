@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from avito_hunt.domain import Listing
-from avito_hunt.market import estimate_market, is_deal
+from avito_hunt.domain import Listing, PriceLevel
+from avito_hunt.market import estimate_market, is_deal, price_level
 
 
 def listing(price: int) -> Listing:
@@ -36,3 +36,17 @@ def test_rejects_price_above_threshold() -> None:
     estimate = estimate_market(listing(92000), [100000] * 5, minimum_count=5)
     assert estimate is not None
     assert not is_deal(estimate, 15)
+
+
+def test_classifies_all_price_levels() -> None:
+    prices = [100000] * 10
+    cases = {
+        90000: PriceLevel.NORMAL,
+        80000: PriceLevel.DEAL,
+        70000: PriceLevel.GREAT_DEAL,
+        60000: PriceLevel.SUSPICIOUSLY_CHEAP,
+    }
+    for candidate_price, expected in cases.items():
+        estimate = estimate_market(listing(candidate_price), prices, minimum_count=10)
+        assert estimate
+        assert price_level(estimate) is expected

@@ -1,9 +1,14 @@
+import logging
+from collections import Counter
 from typing import Any
 
 import httpx
 
 from avito_hunt.domain import Listing
 from avito_hunt.normalization import listing_from_payload
+from avito_hunt.screening import rejection_reason
+
+logger = logging.getLogger(__name__)
 
 
 class JsonFeedSource:
@@ -24,7 +29,18 @@ class JsonFeedSource:
             raise ValueError("JSON feed must be a list or an object with an 'items' list")
 
         listings: list[Listing] = []
+        rejected: Counter[str] = Counter()
         for item in items:
-            if isinstance(item, dict) and (listing := listing_from_payload(item)):
+            if not isinstance(item, dict):
+                rejected["invalid_payload"] += 1
+                continue
+            if reason := rejection_reason(item):
+                rejected[reason.value] += 1
+                continue
+            if listing := listing_from_payload(item):
                 listings.append(listing)
+            else:
+                rejected["invalid_or_not_iphone"] += 1
+        if rejected:
+            logger.info("Filtered source listings: %s", dict(rejected))
         return listings

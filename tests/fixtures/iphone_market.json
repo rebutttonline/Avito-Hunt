@@ -1,0 +1,29 @@
+{
+  "description": "Полностью синтетический рынок iPhone для тестирования Avito Hunt",
+  "items": [
+    {"id":"syn-001","title":"Apple iPhone 15 Pro Max 256GB Natural Titanium","price":109900,"url":"https://example.test/items/syn-001","condition":"Б/у, отличное","region":"Москва","published_at":"2026-08-18T08:00:00Z"},
+    {"id":"syn-002","title":"Айфон 15 Про Макс 256 ГБ, идеальное состояние","price":112000,"url":"https://example.test/items/syn-002","condition":"used","region":"Москва","published_at":"2026-08-18T08:01:00Z"},
+    {"id":"syn-003","title":"15 Pro Max 256 gb, полный комплект","price":107500,"url":"https://example.test/items/syn-003","condition":"used","region":"Москва","published_at":"2026-08-18T08:02:00Z"},
+    {"id":"syn-004","title":"iPhone 15 ProMax 256 гб","price":110500,"url":"https://example.test/items/syn-004","condition":"Б/у","region":"Москва","published_at":"2026-08-18T08:03:00Z"},
+    {"id":"syn-005","title":"Apple iPhone 15 Pro Max, 256GB, титан","price":108900,"url":"https://example.test/items/syn-005","storage_gb":256,"condition":"used","region":"Москва","published_at":"2026-08-18T08:04:00Z"},
+    {"id":"syn-006","title":"iPhone 15 Pro Max 256 ГБ с коробкой","price":111500,"url":"https://example.test/items/syn-006","condition":"used","region":"Москва","published_at":"2026-08-18T08:05:00Z"},
+    {"id":"syn-007","title":"15 Pro Max 256GB Black Titanium","price":106900,"url":"https://example.test/items/syn-007","condition":"used","region":"Москва","published_at":"2026-08-18T08:06:00Z"},
+    {"id":"syn-008","title":"Айфон 15 про макс 256гб","price":113000,"url":"https://example.test/items/syn-008","condition":"used","region":"Москва","published_at":"2026-08-18T08:07:00Z"},
+    {"id":"syn-009","title":"iPhone 15 Pro-Max 256 GB","price":109000,"url":"https://example.test/items/syn-009","condition":"used","region":"Москва","published_at":"2026-08-18T08:08:00Z"},
+    {"id":"syn-010","title":"Apple 15 Pro Max 256 ГБ","price":110000,"url":"https://example.test/items/syn-010","condition":"used","region":"Москва","published_at":"2026-08-18T08:09:00Z"},
+    {"id":"syn-011","title":"iPhone 15 Pro Max 256GB, аккумулятор 91%","price":108000,"url":"https://example.test/items/syn-011","condition":"used","region":"Москва","published_at":"2026-08-18T08:10:00Z"},
+    {"id":"syn-012","title":"15 Pro Max 256 ГБ в отличном состоянии","price":111000,"url":"https://example.test/items/syn-012","condition":"used","region":"Москва","published_at":"2026-08-18T08:11:00Z"},
+    {"id":"syn-normal","title":"iPhone 15 Pro Max 256GB · обычная цена","price":104500,"url":"https://example.test/items/syn-normal","condition":"used","region":"Москва","published_at":"2026-08-18T09:00:00Z"},
+    {"id":"syn-deal","title":"Айфон 15 Про Макс 256 ГБ · выгодно","price":92500,"url":"https://example.test/items/syn-deal","condition":"used","region":"Москва","published_at":"2026-08-18T09:01:00Z"},
+    {"id":"syn-great","title":"15 Pro Max 256GB · очень выгодно","price":80000,"url":"https://example.test/items/syn-great","condition":"used","region":"Москва","published_at":"2026-08-18T09:02:00Z"},
+    {"id":"syn-suspicious","title":"iPhone 15 Pro Max 256 ГБ · срочно","price":65000,"url":"https://example.test/items/syn-suspicious","condition":"used","region":"Москва","published_at":"2026-08-18T09:03:00Z"},
+    {"id":"syn-14-001","title":"iPhone 14 128GB, синий","price":49900,"url":"https://example.test/items/syn-14-001","condition":"used","region":"Санкт-Петербург","published_at":"2026-08-18T09:10:00Z"},
+    {"id":"syn-16e-001","title":"iPhone 16e 128 ГБ, новый","price":64900,"url":"https://example.test/items/syn-16e-001","condition":"new","region":"Казань","published_at":"2026-08-18T09:11:00Z"},
+    {"id":"reject-exchange","title":"Обменяю iPhone 15 Pro Max 256GB на ноутбук","price":90000,"url":"https://example.test/items/reject-exchange","condition":"used","region":"Москва","published_at":"2026-08-18T10:00:00Z"},
+    {"id":"reject-broken","title":"iPhone 15 Pro Max 256GB разбит, не включается","price":30000,"url":"https://example.test/items/reject-broken","condition":"broken","region":"Москва","published_at":"2026-08-18T10:01:00Z"},
+    {"id":"reject-copy","title":"Копия iPhone 15 Pro Max 256GB на Android","price":12000,"url":"https://example.test/items/reject-copy","condition":"new","region":"Москва","published_at":"2026-08-18T10:02:00Z"},
+    {"id":"reject-box","title":"Коробка от iPhone 15 Pro Max 256GB","price":1500,"url":"https://example.test/items/reject-box","condition":"used","region":"Москва","published_at":"2026-08-18T10:03:00Z"},
+    {"id":"reject-parts","title":"iPhone 15 Pro Max 256GB на запчасти","price":20000,"url":"https://example.test/items/reject-parts","condition":"used","region":"Москва","published_at":"2026-08-18T10:04:00Z"},
+    {"id":"reject-price","title":"iPhone 15 Pro Max 256GB цена от 1000 рублей","price":1000,"url":"https://example.test/items/reject-price","condition":"used","region":"Москва","published_at":"2026-08-18T10:05:00Z"}
+  ]
+}

@@ -3,10 +3,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from avito_hunt.domain import Listing
+from avito_hunt.screening import rejection_reason
 
 _IPHONE_MODEL = re.compile(
-    r"\b(?:iphone|айфон)\s*(?P<number>16\s*e|1[1-7]|8|x[rs]?|se)"
-    r"\s*(?P<variant>pro\s*max|promax|pro|plus|mini|air|max)?\b",
+    r"\b(?:(?:apple\s+)?(?:iphone|айфон)\s*)?"
+    r"(?P<number>16\s*e|1[1-7]|8|x[rs]?|se)"
+    r"[\s-]*(?P<variant>pro[\s-]*max|promax|про\s*макс|pro|про|plus|плюс|mini|мини|air|max)?\b",
     re.IGNORECASE,
 )
 _STORAGE = re.compile(r"\b(64|128|256|512|1024)\s*(?:gb|гб|г|гиг(?:абайт(?:а|ов)?)?)\b", re.I)
@@ -20,8 +22,10 @@ def normalize_model(title: str) -> str | None:
     if number == "16E":
         number = "16e"
     variant = " ".join((match.group("variant") or "").lower().split())
-    if variant == "promax":
+    variant = variant.replace("-", " ")
+    if variant in {"promax", "про макс"}:
         variant = "pro max"
+    variant = {"про": "pro", "плюс": "plus", "мини": "mini"}.get(variant, variant)
     suffix = f" {variant.title()}" if variant else ""
     return f"iPhone {number}{suffix}"
 
@@ -56,6 +60,8 @@ def parse_datetime(value: Any) -> datetime:
 
 
 def listing_from_payload(payload: dict[str, Any]) -> Listing | None:
+    if rejection_reason(payload):
+        return None
     title = str(payload.get("title") or "").strip()
     model = normalize_model(title)
     if not model:

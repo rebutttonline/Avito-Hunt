@@ -1,6 +1,7 @@
 from html import escape
 
-from avito_hunt.domain import Listing, MarketEstimate
+from avito_hunt.domain import Listing, MarketEstimate, PriceLevel
+from avito_hunt.market import price_level
 
 
 def deal_message(listing: Listing, estimate: MarketEstimate) -> str:
@@ -9,14 +10,24 @@ def deal_message(listing: Listing, estimate: MarketEstimate) -> str:
     price = f"{listing.price:,}".replace(",", " ")
     market_price = f"{estimate.market_price:,}".replace(",", " ")
     discount = f"{estimate.discount_amount:,}".replace(",", " ")
-    if estimate.discount_percent >= 30:
-        verdict = "цена экстремально ниже рынка — тщательно проверьте продавца"
-    elif estimate.discount_percent >= 20:
-        verdict = "очень выгодная цена относительно похожих объявлений"
-    else:
-        verdict = "цена заметно ниже рынка"
+    level = price_level(estimate)
+    labels = {
+        PriceLevel.NORMAL: ("📊", "Обычная цена", "цена близка к рынку"),
+        PriceLevel.DEAL: ("🔥", "Выгодно", "цена заметно ниже рынка"),
+        PriceLevel.GREAT_DEAL: (
+            "🚀",
+            "Очень выгодно",
+            "цена значительно ниже похожих объявлений",
+        ),
+        PriceLevel.SUSPICIOUSLY_CHEAP: (
+            "🚨",
+            "Подозрительно дёшево",
+            "скидка необычно велика — особенно тщательно проверьте продавца и устройство",
+        ),
+    }
+    icon, label, verdict = labels[level]
     return (
-        "🔥 <b>Найден выгодный iPhone</b>\n\n"
+        f"{icon} <b>{label}</b>\n\n"
         f"<b>{escape(listing.title)}</b>\n"
         f"💰 Цена: <b>{price} ₽</b>\n"
         f"📊 Рыночная оценка: <b>{market_price} ₽</b>\n"

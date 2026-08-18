@@ -1,7 +1,11 @@
 from decimal import ROUND_HALF_UP, Decimal
 from statistics import median
 
-from avito_hunt.domain import Listing, MarketEstimate
+from avito_hunt.domain import Listing, MarketEstimate, PriceLevel
+
+DEAL_THRESHOLD = Decimal("15")
+GREAT_DEAL_THRESHOLD = Decimal("25")
+SUSPICIOUS_THRESHOLD = Decimal("35")
 
 
 def _remove_outliers(prices: list[int]) -> list[int]:
@@ -43,3 +47,13 @@ def estimate_market(
 
 def is_deal(estimate: MarketEstimate | None, threshold_percent: float) -> bool:
     return bool(estimate and estimate.discount_percent >= Decimal(str(threshold_percent)))
+
+
+def price_level(estimate: MarketEstimate) -> PriceLevel:
+    if estimate.discount_percent >= SUSPICIOUS_THRESHOLD:
+        return PriceLevel.SUSPICIOUSLY_CHEAP
+    if estimate.discount_percent >= GREAT_DEAL_THRESHOLD:
+        return PriceLevel.GREAT_DEAL
+    if estimate.discount_percent >= DEAL_THRESHOLD:
+        return PriceLevel.DEAL
+    return PriceLevel.NORMAL

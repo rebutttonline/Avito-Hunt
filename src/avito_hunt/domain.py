@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 
 
@@ -16,6 +17,13 @@ class Listing:
     region: str
     published_at: datetime
     raw: dict[str, Any] = field(default_factory=dict, compare=False)
+
+
+class PriceLevel(StrEnum):
+    NORMAL = "normal"
+    DEAL = "deal"
+    GREAT_DEAL = "great_deal"
+    SUSPICIOUSLY_CHEAP = "suspiciously_cheap"
 
 
 @dataclass(frozen=True, slots=True)

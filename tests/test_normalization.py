@@ -13,6 +13,9 @@ def test_normalizes_all_supported_iphone_families() -> None:
     assert normalize_model("iPhone 16e 128GB") == "iPhone 16e"
     assert normalize_model("iPhone 17 Air 256GB") == "iPhone 17 Air"
     assert normalize_model("iPhone 15 ProMax 512GB") == "iPhone 15 Pro Max"
+    assert normalize_model("15 Pro Max 256GB") == "iPhone 15 Pro Max"
+    assert normalize_model("Айфон 15 Про Макс 256 ГБ") == "iPhone 15 Pro Max"
+    assert normalize_model("iPhone 15 Pro-Max 256GB") == "iPhone 15 Pro Max"
 
 
 def test_rejects_non_iphone_payload() -> None:
