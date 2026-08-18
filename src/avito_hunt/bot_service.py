@@ -11,7 +11,6 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
-    ReplyKeyboardRemove,
 )
 
 from avito_hunt.config import get_settings
@@ -206,12 +205,11 @@ async def send_panel(
     text: str | None = None,
     markup: InlineKeyboardMarkup | None = None,
 ) -> None:
-    panel = await message.answer(
+    await message.answer(
         text or panel_text(preferences),
         parse_mode="HTML",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=markup or panel_keyboard(preferences.enabled),
     )
-    await panel.edit_reply_markup(reply_markup=markup or panel_keyboard(preferences.enabled))
 
 
 @router.message(Command("start"))
