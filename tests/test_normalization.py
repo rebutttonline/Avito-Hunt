@@ -6,6 +6,15 @@ def test_normalizes_iphone_model_and_storage() -> None:
     assert normalize_storage("Apple iPhone 15 Pro Max 256 ГБ") == 256
 
 
+def test_normalizes_all_supported_iphone_families() -> None:
+    assert normalize_model("Айфон 8 Plus 64 ГБ") == "iPhone 8 Plus"
+    assert normalize_model("Apple iPhone XS Max 256GB") == "iPhone XS Max"
+    assert normalize_model("iPhone SE 2022 128 ГБ") == "iPhone SE"
+    assert normalize_model("iPhone 16e 128GB") == "iPhone 16e"
+    assert normalize_model("iPhone 17 Air 256GB") == "iPhone 17 Air"
+    assert normalize_model("iPhone 15 ProMax 512GB") == "iPhone 15 Pro Max"
+
+
 def test_rejects_non_iphone_payload() -> None:
     assert (
         listing_from_payload(

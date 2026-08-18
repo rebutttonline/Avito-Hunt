@@ -5,7 +5,8 @@ from typing import Any
 from avito_hunt.domain import Listing
 
 _IPHONE_MODEL = re.compile(
-    r"\biphone\s*(?P<number>1[1-7]|x[rs]?|se)\s*(?P<variant>pro\s*max|pro|plus|mini)?\b",
+    r"\b(?:iphone|айфон)\s*(?P<number>16\s*e|1[1-7]|8|x[rs]?|se)"
+    r"\s*(?P<variant>pro\s*max|promax|pro|plus|mini|air|max)?\b",
     re.IGNORECASE,
 )
 _STORAGE = re.compile(r"\b(64|128|256|512|1024)\s*(?:gb|гб|г|гиг(?:абайт(?:а|ов)?)?)\b", re.I)
@@ -15,8 +16,12 @@ def normalize_model(title: str) -> str | None:
     match = _IPHONE_MODEL.search(title)
     if not match:
         return None
-    number = match.group("number").upper()
+    number = match.group("number").upper().replace(" ", "")
+    if number == "16E":
+        number = "16e"
     variant = " ".join((match.group("variant") or "").lower().split())
+    if variant == "promax":
+        variant = "pro max"
     suffix = f" {variant.title()}" if variant else ""
     return f"iPhone {number}{suffix}"
 

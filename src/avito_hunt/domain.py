@@ -29,3 +29,21 @@ class MarketEstimate:
     @property
     def is_discounted(self) -> bool:
         return self.discount_amount > 0
+
+
+@dataclass(frozen=True, slots=True)
+class UserPreferences:
+    chat_id: int
+    enabled: bool = True
+    model_generations: tuple[str, ...] = ()
+    storage_options: tuple[int, ...] = ()
+    region: str | None = None
+    min_discount_percent: Decimal = Decimal("15.0")
+
+    @property
+    def tracks_all_models(self) -> bool:
+        return not self.model_generations
+
+    @property
+    def tracks_all_storage(self) -> bool:
+        return not self.storage_options

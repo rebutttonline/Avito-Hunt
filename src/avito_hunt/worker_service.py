@@ -7,8 +7,9 @@ from aiogram import Bot
 from avito_hunt.config import get_settings
 from avito_hunt.database import Database
 from avito_hunt.logging import configure_logging
-from avito_hunt.market import estimate_market, is_deal
+from avito_hunt.market import estimate_market
 from avito_hunt.messages import deal_message
+from avito_hunt.preferences import matches_preferences
 from avito_hunt.source import JsonFeedSource
 
 logger = logging.getLogger(__name__)
@@ -31,28 +32,29 @@ async def process_once(database: Database, source: JsonFeedSource, bot: Bot | No
             prices,
             minimum_count=settings.min_comparable_listings,
         )
-        if not is_deal(estimate, settings.deal_discount_percent):
+        if not estimate or not estimate.is_discounted:
             continue
-        assert estimate
         if not bot:
             logger.warning(
                 "Deal %s found, but Telegram token is not configured",
                 listing.external_id,
             )
             continue
-        for chat_id in await database.enabled_chat_ids():
-            if await database.notification_exists(chat_id, listing.external_id):
+        for preferences in await database.enabled_user_preferences():
+            if not matches_preferences(preferences, listing, estimate.discount_percent):
+                continue
+            if await database.notification_exists(preferences.chat_id, listing.external_id):
                 continue
             try:
                 await bot.send_message(
-                    chat_id,
+                    preferences.chat_id,
                     deal_message(listing, estimate),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
-                await database.mark_notification(chat_id, listing.external_id)
+                await database.mark_notification(preferences.chat_id, listing.external_id)
             except Exception:
-                logger.exception("Unable to notify chat_id=%s", chat_id)
+                logger.exception("Unable to notify chat_id=%s", preferences.chat_id)
 
 
 async def run() -> None:

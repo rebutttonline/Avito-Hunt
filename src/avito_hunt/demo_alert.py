@@ -40,7 +40,7 @@ def build_demo_listings(run_id: str) -> list[Listing]:
         Listing(
             external_id=f"demo-{run_id}-market-{index}",
             title="iPhone 15 Pro 256 ГБ · тестовый аналог",
-            url="https://www.avito.ru/",
+            url=f"https://www.avito.ru/demo/market-{run_id}-{index}",
             price=price,
             model="iPhone 15 Pro",
             storage_gb=256,
@@ -55,7 +55,7 @@ def build_demo_listings(run_id: str) -> list[Listing]:
         Listing(
             external_id=f"demo-{run_id}-deal",
             title="🧪 ТЕСТ · iPhone 15 Pro 256 ГБ",
-            url="https://www.avito.ru/",
+            url=f"https://www.avito.ru/demo/deal-{run_id}",
             price=75_000,
             model="iPhone 15 Pro",
             storage_gb=256,
@@ -79,7 +79,7 @@ async def run() -> None:
     await database.connect()
     await database.ensure_schema()
     try:
-        users = await database.enabled_chat_ids()
+        users = await database.enabled_user_preferences()
         if not users:
             raise RuntimeError("No active bot users. Send /start to the bot first.")
         run_id = uuid4().hex[:12]
