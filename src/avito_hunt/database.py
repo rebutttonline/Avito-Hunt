@@ -55,6 +55,7 @@ ON users (invite_code) WHERE invite_code IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS listings (
     external_id TEXT PRIMARY KEY,
+    source_provider TEXT NOT NULL DEFAULT 'unknown',
     title TEXT NOT NULL,
     url TEXT NOT NULL,
     price INTEGER NOT NULL CHECK (price > 0),
@@ -75,6 +76,12 @@ ALTER TABLE listings ADD COLUMN IF NOT EXISTS feedback_key TEXT;
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS source_provider TEXT NOT NULL DEFAULT 'unknown';
+
+UPDATE listings
+SET source_provider = 'demo'
+WHERE source_provider = 'unknown'
+  AND (external_id LIKE 'demo-%' OR raw @> '{"demo": true}'::jsonb);
 
 CREATE UNIQUE INDEX IF NOT EXISTS listings_feedback_key_idx
 ON listings (feedback_key) WHERE feedback_key IS NOT NULL;
@@ -90,6 +97,9 @@ WHERE relist_fingerprint IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS listings_comparable_idx
 ON listings (model, storage_gb, condition, region, published_at DESC);
+
+CREATE INDEX IF NOT EXISTS listings_provider_comparable_idx
+ON listings (source_provider, model, storage_gb, condition, region, published_at DESC);
 
 CREATE TABLE IF NOT EXISTS notifications (
     chat_id BIGINT NOT NULL REFERENCES users(chat_id) ON DELETE CASCADE,
@@ -332,11 +342,15 @@ class Database:
             is_admin=row["is_admin"],
         )
 
-    async def insert_listing(self, listing: Listing) -> bool:
-        result = await self.record_listing(listing)
+    async def insert_listing(self, listing: Listing, source_provider: str = "unknown") -> bool:
+        result = await self.record_listing(listing, source_provider)
         return result.change is ListingChange.NEW
 
-    async def record_listing(self, listing: Listing) -> ListingRecordResult:
+    async def record_listing(
+        self,
+        listing: Listing,
+        source_provider: str = "unknown",
+    ) -> ListingRecordResult:
         assert self.pool
         canonical = canonical_url(listing.url)
         fingerprint = relist_fingerprint(listing)
@@ -359,7 +373,7 @@ class Database:
                         storage_gb = $6, condition = $7, region = $8,
                         published_at = LEAST(published_at, $9),
                         last_seen_at = NOW(), updated_at = NOW(),
-                        status = $10, raw = $11::jsonb
+                        status = $10, raw = $11::jsonb, source_provider = $12
                     WHERE external_id = $1
                     """,
                     listing.external_id,
@@ -373,6 +387,7 @@ class Database:
                     listing.published_at,
                     listing.status,
                     json.dumps(listing.raw, ensure_ascii=False),
+                    source_provider,
                 )
                 if change is not ListingChange.UNCHANGED:
                     await connection.execute(
@@ -401,15 +416,17 @@ class Database:
             result = await connection.execute(
                 """
                 INSERT INTO listings (
-                    external_id, title, url, price, model, storage_gb,
+                    external_id, source_provider, title, url, price, model, storage_gb,
                     condition, region, published_at, canonical_url,
                     relist_fingerprint, feedback_key, status, raw
                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                    $15::jsonb
                 )
                 ON CONFLICT DO NOTHING
                 """,
                 listing.external_id,
+                source_provider,
                 listing.title,
                 listing.url,
                 listing.price,
@@ -438,6 +455,7 @@ class Database:
         listing: Listing,
         *,
         max_age: timedelta,
+        source_provider: str = "unknown",
     ) -> list[int]:
         assert self.pool
         rows: Sequence[asyncpg.Record] = await self.pool.fetch(
@@ -450,6 +468,7 @@ class Database:
               AND region = $5
               AND status = 'active'
               AND published_at >= NOW() - $6::interval
+              AND source_provider = $7
             """,
             listing.external_id,
             listing.model,
@@ -457,6 +476,7 @@ class Database:
             listing.condition,
             listing.region,
             max_age,
+            source_provider,
         )
         return [row["price"] for row in rows]
 
@@ -465,6 +485,7 @@ class Database:
         listing: Listing,
         *,
         max_age: timedelta,
+        source_provider: str = "unknown",
     ) -> ComparableCohorts:
         assert self.pool
         rows = await self.pool.fetch(
@@ -476,12 +497,14 @@ class Database:
               AND condition = $4
               AND status = 'active'
               AND published_at >= NOW() - $5::interval
+              AND source_provider = $6
             """,
             listing.external_id,
             listing.model,
             listing.storage_gb,
             listing.condition,
             max_age,
+            source_provider,
         )
         neighbors = set(nearby_regions(listing.region))
         national = tuple(row["price"] for row in rows)
@@ -535,6 +558,20 @@ class Database:
             external_id,
             price,
             event_type,
+        )
+        return bool(value)
+
+    async def listing_notification_exists(self, chat_id: int, external_id: str) -> bool:
+        assert self.pool
+        value = await self.pool.fetchval(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM notification_events
+                WHERE chat_id = $1 AND external_id = $2
+            )
+            """,
+            chat_id,
+            external_id,
         )
         return bool(value)
 

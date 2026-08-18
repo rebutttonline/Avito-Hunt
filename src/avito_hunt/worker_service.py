@@ -44,16 +44,25 @@ async def process_once(
         )
     logger.info("Received %d normalized iPhone listings", len(listings))
 
+    candidates = []
     for listing in listings:
         if listing.status != "active":
             await database.mark_listing_status(listing.external_id, listing.status)
             continue
-        record = await database.record_listing(listing)
-        if record.change not in {ListingChange.NEW, ListingChange.PRICE_DROPPED}:
+        record = await database.record_listing(listing, batch.provider)
+        if record.change is ListingChange.DUPLICATE:
             continue
+        candidates.append((listing, record))
+
+    # Persist the complete batch before estimating prices. This makes the result
+    # independent of card order and lets unchanged cards become eligible after
+    # enough comparable listings have accumulated or a user changes preferences.
+    users = await database.enabled_user_preferences()
+    for listing, record in candidates:
         cohorts = await database.comparable_price_cohorts(
             listing,
             max_age=timedelta(days=settings.comparable_max_age_days),
+            source_provider=batch.provider,
         )
         estimate = estimate_market_hierarchical(
             listing,
@@ -68,7 +77,7 @@ async def process_once(
                 listing.external_id,
             )
             continue
-        for preferences in await database.enabled_user_preferences():
+        for preferences in users:
             if not matches_preferences(preferences, listing, estimate.discount_percent):
                 continue
             if is_quiet_time(preferences):
@@ -82,12 +91,19 @@ async def process_once(
             event_type = (
                 "price_drop" if record.change is ListingChange.PRICE_DROPPED else "new_listing"
             )
-            if await database.notification_event_exists(
-                preferences.chat_id,
-                listing.external_id,
-                listing.price,
-                event_type,
-            ):
+            if event_type == "new_listing":
+                already_sent = await database.listing_notification_exists(
+                    preferences.chat_id,
+                    listing.external_id,
+                )
+            else:
+                already_sent = await database.notification_event_exists(
+                    preferences.chat_id,
+                    listing.external_id,
+                    listing.price,
+                    event_type,
+                )
+            if already_sent:
                 continue
             try:
                 await bot.send_message(
@@ -95,7 +111,9 @@ async def process_once(
                     deal_message(
                         listing,
                         estimate,
-                        previous_price=record.previous_price,
+                        previous_price=(
+                            record.previous_price if event_type == "price_drop" else None
+                        ),
                     ),
                     parse_mode="HTML",
                     disable_web_page_preview=True,

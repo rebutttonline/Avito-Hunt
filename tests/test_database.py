@@ -22,3 +22,9 @@ def test_rejects_non_object_system_state() -> None:
 def test_schema_persists_feedback_learning_context() -> None:
     assert "decision_context JSONB" in SCHEMA_SQL
     assert "CREATE TABLE IF NOT EXISTS reviewer_models" in SCHEMA_SQL
+
+
+def test_schema_separates_market_data_by_provider() -> None:
+    assert "source_provider TEXT NOT NULL" in SCHEMA_SQL
+    assert "SET source_provider = 'demo'" in SCHEMA_SQL
+    assert "listings_provider_comparable_idx" in SCHEMA_SQL
