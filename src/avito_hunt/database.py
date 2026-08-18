@@ -158,7 +158,11 @@ class Database:
                 )
                 VALUES ($1, $2, TRUE, FALSE, $3, $4)
                 ON CONFLICT (chat_id) DO UPDATE
-                SET username = EXCLUDED.username, enabled = TRUE, updated_at = NOW()
+                SET username = EXCLUDED.username,
+                    enabled = TRUE,
+                    invite_code = COALESCE(users.invite_code, EXCLUDED.invite_code),
+                    invited_by = COALESCE(users.invited_by, EXCLUDED.invited_by),
+                    updated_at = NOW()
                 """,
                 chat_id,
                 username,
