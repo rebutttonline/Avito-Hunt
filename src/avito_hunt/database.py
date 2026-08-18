@@ -546,7 +546,16 @@ class Database:
     async def get_system_state(self, key: str) -> dict[str, object] | None:
         assert self.pool
         value = await self.pool.fetchval("SELECT value FROM system_state WHERE key = $1", key)
-        return dict(value) if value else None
+        return self.decode_json_object(value)
+
+    @staticmethod
+    def decode_json_object(value: object) -> dict[str, object] | None:
+        if value is None:
+            return None
+        decoded = json.loads(value) if isinstance(value, str) else value
+        if not isinstance(decoded, dict):
+            raise ValueError("System state must be a JSON object")
+        return decoded
 
     async def admin_chat_ids(self) -> list[int]:
         assert self.pool
