@@ -88,9 +88,8 @@ def deal_keyboard(listing: Listing) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Открыть объявление ↗", url=listing.url)],
             [
-                InlineKeyboardButton(text="👍 Полезно", callback_data=f"feedback:good:{key}"),
-                InlineKeyboardButton(text="👎 Мимо", callback_data=f"feedback:bad:{key}"),
+                InlineKeyboardButton(text="🔥 Интересно", callback_data=f"feedback:good:{key}"),
+                InlineKeyboardButton(text="😐 Неинтересно", callback_data=f"feedback:bad:{key}"),
             ],
-            [InlineKeyboardButton(text="🚩 Подозрительно", callback_data=f"feedback:risk:{key}")],
         ]
     )

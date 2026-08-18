@@ -547,8 +547,15 @@ async def listing_feedback(callback: CallbackQuery) -> None:
     if not callback.data:
         return
     _, verdict, key = callback.data.split(":", 2)
-    saved = await database.add_feedback(callback.from_user.id, key, verdict)
-    await callback.answer("Спасибо, оценка сохранена ✅" if saved else "Объявление не найдено")
+    result = await database.learn_from_feedback(callback.from_user.id, key, verdict)
+    if not result.saved:
+        await callback.answer("Объявление не найдено")
+    elif result.duplicate:
+        await callback.answer("Этот отзыв уже учтён ✅")
+    elif not result.learned:
+        await callback.answer("Отзыв сохранён; обучение включено для новых карточек ✅")
+    else:
+        await callback.answer(f"Спасибо! Модель обучена на {result.samples} отзывах ✅")
 
 
 async def admin_text() -> str:
@@ -574,6 +581,8 @@ async def admin_text() -> str:
         f"Объявления: <b>{stats['listings']}</b>\n"
         f"Уведомления: <b>{stats['notifications']}</b>\n"
         f"Отзывы: <b>{stats['feedback']}</b>\n"
+        f"Обучающих оценок: <b>{stats['model_samples']}</b> "
+        f"(🔥 {stats['model_positives']} / 😐 {stats['model_negatives']})\n"
         f"Источник: <b>{source_status}</b>{source_details}"
     )
 

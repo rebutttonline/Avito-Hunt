@@ -1,6 +1,6 @@
 import pytest
 
-from avito_hunt.database import Database
+from avito_hunt.database import SCHEMA_SQL, Database
 
 
 def test_decodes_asyncpg_jsonb_string() -> None:
@@ -17,3 +17,8 @@ def test_accepts_predecoded_json_object() -> None:
 def test_rejects_non_object_system_state() -> None:
     with pytest.raises(ValueError, match="JSON object"):
         Database.decode_json_object('["unexpected"]')
+
+
+def test_schema_persists_feedback_learning_context() -> None:
+    assert "decision_context JSONB" in SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS reviewer_models" in SCHEMA_SQL

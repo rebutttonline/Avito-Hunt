@@ -9,6 +9,7 @@ from avito_hunt.avito_html_source import AvitoHtmlSource, parse_targets
 from avito_hunt.config import get_settings
 from avito_hunt.database import Database
 from avito_hunt.domain import ListingChange
+from avito_hunt.learning import decision_context
 from avito_hunt.logging import configure_logging
 from avito_hunt.market import estimate_market_hierarchical
 from avito_hunt.messages import deal_keyboard, deal_message
@@ -105,6 +106,7 @@ async def process_once(
                     listing.external_id,
                     listing.price,
                     event_type,
+                    decision_context(listing, estimate),
                 )
             except Exception:
                 logger.exception("Unable to notify chat_id=%s", preferences.chat_id)

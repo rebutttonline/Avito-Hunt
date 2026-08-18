@@ -19,6 +19,13 @@ from avito_hunt.domain import (
     ListingRecordResult,
     UserPreferences,
 )
+from avito_hunt.learning import (
+    InterestModel,
+    LearningResult,
+    features_from_context,
+    model_from_json,
+    update_interest_model,
+)
 from avito_hunt.regions import nearby_regions
 
 SCHEMA_SQL = """
@@ -96,9 +103,13 @@ CREATE TABLE IF NOT EXISTS notification_events (
     external_id TEXT NOT NULL REFERENCES listings(external_id) ON DELETE CASCADE,
     price INTEGER NOT NULL,
     event_type TEXT NOT NULL,
+    decision_context JSONB NOT NULL DEFAULT '{}'::jsonb,
     sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (chat_id, external_id, price, event_type)
 );
+
+ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS decision_context JSONB
+    NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS price_history (
     external_id TEXT NOT NULL REFERENCES listings(external_id) ON DELETE CASCADE,
@@ -116,6 +127,15 @@ CREATE TABLE IF NOT EXISTS listing_feedback (
     verdict TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (chat_id, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS reviewer_models (
+    chat_id BIGINT PRIMARY KEY REFERENCES users(chat_id) ON DELETE CASCADE,
+    weights JSONB NOT NULL,
+    samples INTEGER NOT NULL DEFAULT 0,
+    positives INTEGER NOT NULL DEFAULT 0,
+    negatives INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS system_state (
@@ -524,18 +544,22 @@ class Database:
         external_id: str,
         price: int,
         event_type: str,
+        decision_context: dict[str, object] | None = None,
     ) -> bool:
         assert self.pool
         result = await self.pool.execute(
             """
-            INSERT INTO notification_events (chat_id, external_id, price, event_type)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO notification_events (
+                chat_id, external_id, price, event_type, decision_context
+            )
+            VALUES ($1, $2, $3, $4, $5::jsonb)
             ON CONFLICT DO NOTHING
             """,
             chat_id,
             external_id,
             price,
             event_type,
+            json.dumps(decision_context or {}, ensure_ascii=False),
         )
         return result == "INSERT 0 1"
 
@@ -567,6 +591,124 @@ class Database:
             verdict,
         )
         return result in {"INSERT 0 1", "UPDATE 1"}
+
+    async def learn_from_feedback(
+        self,
+        chat_id: int,
+        key: str,
+        verdict: str,
+    ) -> LearningResult:
+        assert self.pool
+        if verdict not in {"good", "bad"}:
+            return LearningResult(saved=False)
+        async with self.pool.acquire() as connection, connection.transaction():
+            external_id = await connection.fetchval(
+                "SELECT external_id FROM listings WHERE feedback_key = $1",
+                key,
+            )
+            if not external_id:
+                return LearningResult(saved=False)
+            existing_verdict = await connection.fetchval(
+                """
+                SELECT verdict FROM listing_feedback
+                WHERE chat_id = $1 AND external_id = $2
+                """,
+                chat_id,
+                external_id,
+            )
+            if existing_verdict:
+                row = await connection.fetchrow(
+                    """
+                    SELECT weights, samples, positives, negatives FROM reviewer_models
+                    WHERE chat_id = $1
+                    """,
+                    chat_id,
+                )
+                model = self._model_from_row(row)
+                return LearningResult(
+                    saved=True,
+                    duplicate=True,
+                    samples=model.samples,
+                    positives=model.positives,
+                    negatives=model.negatives,
+                )
+            await connection.execute(
+                """
+                INSERT INTO listing_feedback (chat_id, external_id, verdict)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (chat_id, external_id) DO UPDATE
+                SET verdict = EXCLUDED.verdict, created_at = NOW()
+                """,
+                chat_id,
+                external_id,
+                verdict,
+            )
+            raw_context = await connection.fetchval(
+                """
+                SELECT decision_context FROM notification_events
+                WHERE chat_id = $1 AND external_id = $2
+                ORDER BY sent_at DESC LIMIT 1
+                """,
+                chat_id,
+                external_id,
+            )
+            context = self.decode_json_object(raw_context) if raw_context else None
+            features = features_from_context(context or {})
+            if not features:
+                return LearningResult(saved=True)
+            row = await connection.fetchrow(
+                """
+                SELECT weights, samples, positives, negatives FROM reviewer_models
+                WHERE chat_id = $1 FOR UPDATE
+                """,
+                chat_id,
+            )
+            model = self._model_from_row(row)
+            updated, before, after = update_interest_model(
+                model,
+                features,
+                interested=verdict == "good",
+            )
+            await connection.execute(
+                """
+                INSERT INTO reviewer_models (
+                    chat_id, weights, samples, positives, negatives
+                ) VALUES ($1, $2::jsonb, $3, $4, $5)
+                ON CONFLICT (chat_id) DO UPDATE
+                SET weights = EXCLUDED.weights,
+                    samples = EXCLUDED.samples,
+                    positives = EXCLUDED.positives,
+                    negatives = EXCLUDED.negatives,
+                    updated_at = NOW()
+                """,
+                chat_id,
+                json.dumps(updated.weights),
+                updated.samples,
+                updated.positives,
+                updated.negatives,
+            )
+            return LearningResult(
+                saved=True,
+                learned=True,
+                samples=updated.samples,
+                positives=updated.positives,
+                negatives=updated.negatives,
+                prediction_before=before,
+                prediction_after=after,
+            )
+
+    @staticmethod
+    def _model_from_row(row: asyncpg.Record | None) -> InterestModel:
+        if not row:
+            return InterestModel()
+        raw_weights = row["weights"]
+        weights = json.loads(raw_weights) if isinstance(raw_weights, str) else raw_weights
+        return model_from_json(
+            weights,
+            samples=row["samples"],
+            positives=row["positives"],
+            negatives=row["negatives"],
+        )
 
     async def set_system_state(self, key: str, value: dict[str, object]) -> None:
         assert self.pool
@@ -608,7 +750,10 @@ class Database:
                 (SELECT COUNT(*) FROM users WHERE enabled = TRUE) AS enabled_users,
                 (SELECT COUNT(*) FROM listings) AS listings,
                 (SELECT COUNT(*) FROM notification_events) AS notifications,
-                (SELECT COUNT(*) FROM listing_feedback) AS feedback
+                (SELECT COUNT(*) FROM listing_feedback) AS feedback,
+                (SELECT COALESCE(SUM(samples), 0) FROM reviewer_models) AS model_samples,
+                (SELECT COALESCE(SUM(positives), 0) FROM reviewer_models) AS model_positives,
+                (SELECT COALESCE(SUM(negatives), 0) FROM reviewer_models) AS model_negatives
             """
         )
         source = await self.get_system_state("source")
@@ -618,6 +763,9 @@ class Database:
             "listings": row["listings"],
             "notifications": row["notifications"],
             "feedback": row["feedback"],
+            "model_samples": row["model_samples"],
+            "model_positives": row["model_positives"],
+            "model_negatives": row["model_negatives"],
             "source": source or {"status": "unknown"},
         }
 

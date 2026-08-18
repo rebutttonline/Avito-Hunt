@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from avito_hunt.domain import Listing, MarketEstimate
-from avito_hunt.messages import deal_message
+from avito_hunt.messages import deal_keyboard, deal_message
 
 
 @pytest.mark.parametrize(
@@ -66,3 +66,29 @@ def test_message_explains_market_range_scope_and_low_confidence() -> None:
     assert "93%" in message
     assert "рынку России" in message
     assert "уверенность: низкая" in message
+
+
+def test_deal_keyboard_has_two_reviewer_choices() -> None:
+    listing = Listing(
+        external_id="feedback",
+        title="iPhone 15 Pro 256GB",
+        url="https://example.test/feedback",
+        price=75_000,
+        model="iPhone 15 Pro",
+        storage_gb=256,
+        condition="used",
+        region="москва",
+        published_at=datetime.now(UTC),
+    )
+    keyboard = deal_keyboard(listing)
+    feedback_buttons = [
+        button
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data and button.callback_data.startswith("feedback:")
+    ]
+    assert [button.text for button in feedback_buttons] == ["🔥 Интересно", "😐 Неинтересно"]
+    assert {button.callback_data.split(":", 2)[1] for button in feedback_buttons} == {
+        "good",
+        "bad",
+    }
