@@ -1,7 +1,7 @@
 from datetime import datetime
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     avito_scraper_targets: str = ""
     avito_scraper_min_interval_seconds: int = Field(default=600, ge=300, le=21600)
     avito_scraper_expires_at: datetime | None = None
+
+    @field_validator("avito_scraper_expires_at", mode="before")
+    @classmethod
+    def empty_datetime_is_none(cls, value: object) -> object:
+        return None if value == "" else value
 
     @property
     def bot_token(self) -> str:
