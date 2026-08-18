@@ -555,6 +555,18 @@ async def admin_text() -> str:
     stats = await database.admin_stats()
     source = stats["source"]
     source_status = source.get("status", "unknown") if isinstance(source, dict) else "unknown"
+    source_details = ""
+    if isinstance(source, dict):
+        provider = source.get("provider")
+        received = source.get("received")
+        accepted = source.get("accepted")
+        fetched_at = source.get("fetched_at")
+        if provider:
+            source_details += f"\nПоставщик: <b>{escape(str(provider))}</b>"
+        if received is not None and accepted is not None:
+            source_details += f"\nПоследний сбор: <b>{accepted}/{received}</b> карточек"
+        if fetched_at:
+            source_details += f"\nПолучено: <code>{escape(str(fetched_at))}</code>"
     return (
         "🛠 <b>Админ-панель Avito Hunt</b>\n\n"
         f"Пользователи: <b>{stats['users']}</b>\n"
@@ -562,7 +574,7 @@ async def admin_text() -> str:
         f"Объявления: <b>{stats['listings']}</b>\n"
         f"Уведомления: <b>{stats['notifications']}</b>\n"
         f"Отзывы: <b>{stats['feedback']}</b>\n"
-        f"Источник: <b>{source_status}</b>"
+        f"Источник: <b>{source_status}</b>{source_details}"
     )
 
 

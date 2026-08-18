@@ -337,7 +337,8 @@ class Database:
                     UPDATE listings
                     SET title = $2, url = $3, price = $4, model = $5,
                         storage_gb = $6, condition = $7, region = $8,
-                        published_at = $9, last_seen_at = NOW(), updated_at = NOW(),
+                        published_at = LEAST(published_at, $9),
+                        last_seen_at = NOW(), updated_at = NOW(),
                         status = $10, raw = $11::jsonb
                     WHERE external_id = $1
                     """,

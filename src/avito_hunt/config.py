@@ -1,3 +1,4 @@
+from datetime import datetime
 from functools import lru_cache
 
 from pydantic import Field, SecretStr
@@ -18,6 +19,10 @@ class Settings(BaseSettings):
     deal_discount_percent: float = Field(default=15.0, ge=1, le=90)
     min_comparable_listings: int = Field(default=10, ge=3, le=500)
     comparable_max_age_days: int = Field(default=30, ge=1, le=365)
+    avito_scraper_enabled: bool = False
+    avito_scraper_targets: str = ""
+    avito_scraper_min_interval_seconds: int = Field(default=600, ge=300, le=21600)
+    avito_scraper_expires_at: datetime | None = None
 
     @property
     def bot_token(self) -> str:

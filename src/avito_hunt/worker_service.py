@@ -1,9 +1,11 @@
 import asyncio
 import logging
-from datetime import timedelta
+import secrets
+from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot
 
+from avito_hunt.avito_html_source import AvitoHtmlSource, parse_targets
 from avito_hunt.config import get_settings
 from avito_hunt.database import Database
 from avito_hunt.domain import ListingChange
@@ -117,18 +119,45 @@ async def run() -> None:
     bot = Bot(settings.bot_token) if settings.bot_token else None
 
     try:
-        if not settings.source_json_url:
+        source: ListingSource
+        interval = settings.source_poll_seconds
+        pilot_expires_at: datetime | None = None
+        if settings.source_json_url:
+            source = JsonFeedSource(settings.source_json_url)
+        elif settings.avito_scraper_enabled:
+            pilot_expires_at = settings.avito_scraper_expires_at
+            if not pilot_expires_at or pilot_expires_at.tzinfo is None:
+                raise RuntimeError("AVITO_SCRAPER_EXPIRES_AT must be timezone-aware")
+            source = AvitoHtmlSource(parse_targets(settings.avito_scraper_targets))
+            interval = max(interval, settings.avito_scraper_min_interval_seconds)
+            logger.warning(
+                "Limited Avito HTML pilot enabled until %s; interval=%ds",
+                pilot_expires_at.isoformat(),
+                interval,
+            )
+        else:
             await database.set_system_state(
                 "source",
-                {"status": "waiting", "reason": "SOURCE_JSON_URL is empty"},
+                {"status": "waiting", "reason": "No listing source configured"},
             )
-            logger.warning("SOURCE_JSON_URL is empty; worker is waiting for a data source")
+            logger.warning("No listing source configured; worker is waiting")
             while True:
                 await asyncio.sleep(3600)
 
-        source = JsonFeedSource(settings.source_json_url)
         consecutive_failures = 0
         while True:
+            if pilot_expires_at and datetime.now(UTC) >= pilot_expires_at:
+                await database.set_system_state(
+                    "source",
+                    {
+                        "status": "expired",
+                        "provider": "avito-public-html-pilot",
+                        "expired_at": pilot_expires_at.isoformat(),
+                    },
+                )
+                logger.warning("Avito HTML pilot expired and stopped automatically")
+                while True:
+                    await asyncio.sleep(3600)
             try:
                 await process_once(database, source, bot)
                 consecutive_failures = 0
@@ -150,7 +179,9 @@ async def run() -> None:
                             "🚨 Источник Avito Hunt недоступен: "
                             f"{consecutive_failures} ошибок подряд.",
                         )
-            await asyncio.sleep(settings.source_poll_seconds)
+            backoff = min(2 ** min(consecutive_failures, 5), 36) if consecutive_failures else 1
+            jitter = secrets.randbelow(31) if settings.avito_scraper_enabled else 0
+            await asyncio.sleep(interval * backoff + jitter)
     finally:
         if bot:
             await bot.session.close()
