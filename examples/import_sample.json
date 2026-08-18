@@ -1,0 +1,106 @@
+{
+  "items": [
+    {
+      "id": "sample-market-1",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 100000,
+      "url": "https://example.test/sample-market-1",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:00:00Z",
+      "status": "active"
+    },
+    {
+      "id": "sample-market-2",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 99000,
+      "url": "https://example.test/sample-market-2",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:01:00Z"
+    },
+    {
+      "id": "sample-market-3",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 99500,
+      "url": "https://example.test/sample-market-3",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:02:00Z"
+    },
+    {
+      "id": "sample-market-4",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 100500,
+      "url": "https://example.test/sample-market-4",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:03:00Z"
+    },
+    {
+      "id": "sample-market-5",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 101000,
+      "url": "https://example.test/sample-market-5",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:04:00Z"
+    },
+    {
+      "id": "sample-market-6",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 101500,
+      "url": "https://example.test/sample-market-6",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:05:00Z"
+    },
+    {
+      "id": "sample-market-7",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 102000,
+      "url": "https://example.test/sample-market-7",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:06:00Z"
+    },
+    {
+      "id": "sample-market-8",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 102500,
+      "url": "https://example.test/sample-market-8",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:07:00Z"
+    },
+    {
+      "id": "sample-market-9",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 103000,
+      "url": "https://example.test/sample-market-9",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:08:00Z"
+    },
+    {
+      "id": "sample-market-10",
+      "title": "iPhone 15 Pro 256 ГБ",
+      "price": 104000,
+      "url": "https://example.test/sample-market-10",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:09:00Z"
+    },
+    {
+      "id": "sample-candidate-1",
+      "title": "iPhone 15 Pro 256 ГБ · тест",
+      "price": 78000,
+      "url": "https://example.test/sample-candidate-1",
+      "condition": "used",
+      "region": "Москва",
+      "published_at": "2026-08-18T10:05:00Z",
+      "description": "Аккумулятор 88%, полный комплект, без предоплаты",
+      "status": "active"
+    }
+  ]
+}

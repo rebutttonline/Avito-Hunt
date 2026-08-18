@@ -36,3 +36,33 @@ def test_message_uses_price_level_label(discount: Decimal, label: str) -> None:
         confidence="medium",
     )
     assert label in deal_message(listing, estimate)
+
+
+def test_message_explains_market_range_scope_and_low_confidence() -> None:
+    listing = Listing(
+        external_id="explain",
+        title="iPhone 15 Pro 256GB",
+        url="https://example.test/explain",
+        price=75_000,
+        model="iPhone 15 Pro",
+        storage_gb=256,
+        condition="used",
+        region="томск",
+        published_at=datetime.now(UTC),
+    )
+    estimate = MarketEstimate(
+        market_price=100_000,
+        discount_amount=25_000,
+        discount_percent=Decimal("25"),
+        comparable_count=15,
+        confidence="low",
+        range_low=95_000,
+        range_high=105_000,
+        cheaper_than_percent=93,
+        market_scope="national",
+    )
+    message = deal_message(listing, estimate)
+    assert "95 000–105 000 ₽" in message
+    assert "93%" in message
+    assert "рынку России" in message
+    assert "уверенность: низкая" in message

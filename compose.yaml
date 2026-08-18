@@ -62,6 +62,30 @@ services:
     <<: *app
     command: ["python", "-m", "avito_hunt.worker_service"]
 
+  provider-emulator:
+    profiles: ["tools"]
+    build:
+      context: .
+    command: ["python", "-m", "avito_hunt.provider_emulator"]
+    environment:
+      EMULATOR_PORT: 8080
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "python", "-m", "avito_hunt.provider_emulator", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
 volumes:
   postgres_data:
     name: avito-hunt-postgres

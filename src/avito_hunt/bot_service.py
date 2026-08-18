@@ -3,6 +3,8 @@ import logging
 from contextlib import suppress
 from datetime import datetime
 from decimal import Decimal
+from html import escape
+from io import BytesIO
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -18,7 +20,9 @@ from aiogram.types import (
 from avito_hunt.config import get_settings
 from avito_hunt.database import Database
 from avito_hunt.domain import UserPreferences
+from avito_hunt.importer import parse_import
 from avito_hunt.logging import configure_logging
+from avito_hunt.market_lab import format_lab_report, run_market_lab
 from avito_hunt.messages import deal_message
 from avito_hunt.preferences import (
     MODEL_GENERATIONS,
@@ -27,12 +31,15 @@ from avito_hunt.preferences import (
     format_models,
     format_storage,
 )
+from avito_hunt.provider import BatchSource
 from avito_hunt.simulator import demo_estimate
+from avito_hunt.worker_service import process_once
 
 logger = logging.getLogger(__name__)
 router = Router()
 database: Database
 waiting_for_region: dict[int, int] = {}
+waiting_for_import: dict[int, int] = {}
 
 REGIONS = {
     "moscow": "москва",
@@ -436,6 +443,7 @@ async def edit_callback(callback: CallbackQuery, text: str, markup: InlineKeyboa
 @router.callback_query(F.data == "panel:root")
 async def panel_root(callback: CallbackQuery) -> None:
     waiting_for_region.pop(callback.from_user.id, None)
+    waiting_for_import.pop(callback.from_user.id, None)
     preferences = await database.get_user_preferences(callback.from_user.id)
     if preferences:
         await edit_callback(
@@ -561,6 +569,8 @@ async def admin_text() -> str:
 def admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="🧪 Запустить Market Lab", callback_data="admin:lab")],
+            [InlineKeyboardButton(text="📥 Импорт JSON/CSV", callback_data="admin:import")],
             [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:root")],
             [InlineKeyboardButton(text="← Назад", callback_data="panel:root")],
         ]
@@ -574,6 +584,93 @@ async def admin_root(callback: CallbackQuery) -> None:
         await callback.answer("Нет доступа", show_alert=True)
         return
     await edit_callback(callback, await admin_text(), admin_keyboard())
+
+
+@router.callback_query(F.data == "admin:lab")
+async def admin_market_lab(callback: CallbackQuery) -> None:
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if not preferences or not preferences.is_admin:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    report = await asyncio.to_thread(run_market_lab)
+    await edit_callback(callback, format_lab_report(report), back_keyboard("admin:root"))
+
+
+@router.callback_query(F.data == "admin:import")
+async def admin_import(callback: CallbackQuery) -> None:
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if not preferences or not preferences.is_admin:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        waiting_for_import[callback.from_user.id] = callback.message.message_id
+    await edit_callback(
+        callback,
+        "📥 <b>Импорт тестовых объявлений</b>\n\n"
+        "Отправьте файл JSON или CSV размером до 1 МБ и не более 1000 записей. "
+        "Объявления пройдут тот же фильтр, оценку рынка и дедупликацию, что и данные "
+        "будущего поставщика. Подходящие предложения могут отправить уведомления "
+        "активным тестировщикам.",
+        back_keyboard("admin:import_cancel"),
+    )
+
+
+@router.callback_query(F.data == "admin:import_cancel")
+async def admin_import_cancel(callback: CallbackQuery) -> None:
+    preferences = await database.get_user_preferences(callback.from_user.id)
+    if not preferences or not preferences.is_admin:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    waiting_for_import.pop(callback.from_user.id, None)
+    await edit_callback(callback, await admin_text(), admin_keyboard())
+
+
+def is_waiting_for_import(message: Message) -> bool:
+    return message.chat.id in waiting_for_import and message.document is not None
+
+
+@router.message(is_waiting_for_import)
+async def receive_admin_import(message: Message) -> None:
+    panel_message_id = waiting_for_import.pop(message.chat.id)
+    preferences = await database.get_user_preferences(message.chat.id)
+    if not preferences or not preferences.is_admin or not message.document:
+        return
+    markup = back_keyboard("admin:root")
+    try:
+        if message.document.file_size and message.document.file_size > 1_000_000:
+            raise ValueError("Файл больше 1 МБ")
+        filename = message.document.file_name or "import"
+        buffer = BytesIO()
+        await message.bot.download(message.document, destination=buffer)
+        if buffer.getbuffer().nbytes > 1_000_000:
+            raise ValueError("Файл больше 1 МБ")
+        batch = await asyncio.to_thread(parse_import, buffer.getvalue(), filename)
+        await process_once(
+            database,
+            BatchSource(batch),
+            message.bot,
+            update_source_state=False,
+        )
+        text = (
+            "✅ <b>Импорт завершён</b>\n\n"
+            f"Получено строк: <b>{batch.received_count}</b>\n"
+            f"Принято iPhone: <b>{len(batch.listings)}</b>\n"
+            f"Отклонено фильтрами: <b>{batch.rejected_count}</b>"
+        )
+    except (ValueError, UnicodeError) as error:
+        text = f"⚠️ <b>Импорт не выполнен</b>\n\n{escape(str(error))}"
+    except Exception:
+        logger.exception("Admin listing import failed")
+        text = "⚠️ <b>Импорт не выполнен</b>\n\nВнутренняя ошибка записана в журнал."
+    await message.bot.edit_message_text(
+        text,
+        chat_id=message.chat.id,
+        message_id=panel_message_id,
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+    with suppress(TelegramBadRequest):
+        await message.delete()
 
 
 @router.callback_query(F.data == "settings:root")

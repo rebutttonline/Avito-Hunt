@@ -12,7 +12,14 @@ from avito_hunt.deduplication import (
     is_specific_listing_url,
     relist_fingerprint,
 )
-from avito_hunt.domain import Listing, ListingChange, ListingRecordResult, UserPreferences
+from avito_hunt.domain import (
+    ComparableCohorts,
+    Listing,
+    ListingChange,
+    ListingRecordResult,
+    UserPreferences,
+)
+from avito_hunt.regions import nearby_regions
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS users (
@@ -431,6 +438,35 @@ class Database:
             max_age,
         )
         return [row["price"] for row in rows]
+
+    async def comparable_price_cohorts(
+        self,
+        listing: Listing,
+        *,
+        max_age: timedelta,
+    ) -> ComparableCohorts:
+        assert self.pool
+        rows = await self.pool.fetch(
+            """
+            SELECT price, region FROM listings
+            WHERE external_id <> $1
+              AND model = $2
+              AND storage_gb IS NOT DISTINCT FROM $3
+              AND condition = $4
+              AND status = 'active'
+              AND published_at >= NOW() - $5::interval
+            """,
+            listing.external_id,
+            listing.model,
+            listing.storage_gb,
+            listing.condition,
+            max_age,
+        )
+        neighbors = set(nearby_regions(listing.region))
+        national = tuple(row["price"] for row in rows)
+        nearby = tuple(row["price"] for row in rows if row["region"] in neighbors)
+        exact = tuple(row["price"] for row in rows if row["region"] == listing.region)
+        return ComparableCohorts(exact_region=exact, nearby_regions=nearby, national=national)
 
     async def mark_notification(self, chat_id: int, external_id: str) -> bool:
         assert self.pool

@@ -16,7 +16,9 @@ def deal_message(
     demo: bool = False,
 ) -> str:
     storage = f", {listing.storage_gb} ГБ" if listing.storage_gb else ""
-    confidence = "высокая" if estimate.confidence == "high" else "средняя"
+    confidence = {"high": "высокая", "medium": "средняя", "low": "низкая"}.get(
+        estimate.confidence, "неизвестная"
+    )
     price = f"{listing.price:,}".replace(",", " ")
     market_price = f"{estimate.market_price:,}".replace(",", " ")
     discount = f"{estimate.discount_amount:,}".replace(",", " ")
@@ -47,18 +49,34 @@ def deal_message(
         old_price = f"{previous_price:,}".replace(",", " ")
         price_change = f"\n⬇️ Цена снижена с {old_price} ₽"
     demo_prefix = "🧪 <b>ДЕМОНСТРАЦИЯ</b>\n" if demo else ""
+    range_line = ""
+    if estimate.range_low is not None and estimate.range_high is not None:
+        low = f"{estimate.range_low:,}".replace(",", " ")
+        high = f"{estimate.range_high:,}".replace(",", " ")
+        range_line = f"\nОбычный диапазон: <b>{low}–{high} ₽</b>"
+    percentile_line = ""
+    if estimate.cheaper_than_percent is not None:
+        percentile_line = (
+            f"\nЦена ниже, чем у <b>{estimate.cheaper_than_percent}%</b> похожих предложений"
+        )
+    scope_labels = {
+        "exact_region": "вашему региону",
+        "nearby_regions": "вашему и соседним регионам",
+        "national": "рынку России",
+    }
+    scope = scope_labels.get(estimate.market_scope, "сопоставимому рынку")
     return (
         f"{demo_prefix}{icon} <b>{label}</b>\n\n"
         f"<b>{escape(listing.title)}</b>\n"
         f"💰 Цена: <b>{price} ₽</b>\n"
-        f"📊 Рыночная оценка: <b>{market_price} ₽</b>\n"
+        f"📊 Рыночная оценка: <b>{market_price} ₽</b>{range_line}{percentile_line}\n"
         f"📉 Выгода: <b>{discount} ₽ "
         f"({estimate.discount_percent}%)</b>\n"
         f"📱 {escape(listing.model)}{storage}, {escape(listing.condition)}\n"
         f"📍 {escape(listing.region.title())}{price_change}\n"
         f"{risk_line}\n\n"
         f"<b>Почему это предложение:</b> {verdict}. Расчёт сделан по медиане "
-        f"{estimate.comparable_count} сопоставимых объявлений; уверенность: {confidence}.\n\n"
+        f"{estimate.comparable_count} объявлений по {scope}; уверенность: {confidence}.\n\n"
         f'<a href="{escape(listing.url, quote=True)}">Открыть объявление</a>\n\n'
         "⚠️ Не переводите предоплату и проверяйте устройство перед покупкой."
     )

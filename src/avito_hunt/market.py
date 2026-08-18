@@ -1,7 +1,8 @@
+from dataclasses import replace
 from decimal import ROUND_HALF_UP, Decimal
 from statistics import median
 
-from avito_hunt.domain import Listing, MarketEstimate, PriceLevel
+from avito_hunt.domain import ComparableCohorts, Listing, MarketEstimate, PriceLevel
 
 DEAL_THRESHOLD = Decimal("15")
 GREAT_DEAL_THRESHOLD = Decimal("25")
@@ -30,7 +31,8 @@ def estimate_market(
     if len(filtered_prices) < minimum_count:
         return None
 
-    market_price = round(median(filtered_prices))
+    ordered = sorted(filtered_prices)
+    market_price = round(median(ordered))
     discount_amount = market_price - listing.price
     discount_percent = (Decimal(discount_amount * 100) / Decimal(market_price)).quantize(
         Decimal("0.1"), rounding=ROUND_HALF_UP
@@ -42,7 +44,46 @@ def estimate_market(
         discount_percent=discount_percent,
         comparable_count=len(filtered_prices),
         confidence=confidence,
+        range_low=round(_percentile(ordered, Decimal("0.25"))),
+        range_high=round(_percentile(ordered, Decimal("0.75"))),
+        cheaper_than_percent=round(
+            sum(price > listing.price for price in ordered) * 100 / len(ordered)
+        ),
     )
+
+
+def estimate_market_hierarchical(
+    listing: Listing,
+    cohorts: ComparableCohorts,
+    *,
+    minimum_count: int,
+) -> MarketEstimate | None:
+    """Use the narrowest market cohort that has enough robust observations."""
+    candidates = (
+        ("exact_region", cohorts.exact_region, None),
+        ("nearby_regions", cohorts.nearby_regions, "medium"),
+        ("national", cohorts.national, "low"),
+    )
+    for scope, prices, confidence_cap in candidates:
+        estimate = estimate_market(listing, list(prices), minimum_count=minimum_count)
+        if estimate:
+            confidence = estimate.confidence
+            if confidence_cap == "medium" and confidence == "high":
+                confidence = "medium"
+            elif confidence_cap == "low":
+                confidence = "low"
+            return replace(estimate, confidence=confidence, market_scope=scope)
+    return None
+
+
+def _percentile(ordered: list[int], percentile: Decimal) -> Decimal:
+    if len(ordered) == 1:
+        return Decimal(ordered[0])
+    position = percentile * Decimal(len(ordered) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return Decimal(ordered[lower]) + Decimal(ordered[upper] - ordered[lower]) * fraction
 
 
 def is_deal(estimate: MarketEstimate | None, threshold_percent: float) -> bool:

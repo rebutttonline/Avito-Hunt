@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from avito_hunt.domain import Listing, PriceLevel
-from avito_hunt.market import estimate_market, is_deal, price_level
+from avito_hunt.domain import ComparableCohorts, Listing, PriceLevel
+from avito_hunt.market import estimate_market, estimate_market_hierarchical, is_deal, price_level
 
 
 def listing(price: int) -> Listing:
@@ -50,3 +50,18 @@ def test_classifies_all_price_levels() -> None:
         estimate = estimate_market(listing(candidate_price), prices, minimum_count=10)
         assert estimate
         assert price_level(estimate) is expected
+
+
+def test_hierarchical_market_uses_narrowest_sufficient_scope() -> None:
+    cohorts = ComparableCohorts(
+        exact_region=(100000, 101000),
+        nearby_regions=tuple([100000] * 10),
+        national=tuple([110000] * 20),
+    )
+    estimate = estimate_market_hierarchical(listing(80000), cohorts, minimum_count=5)
+    assert estimate is not None
+    assert estimate.market_scope == "nearby_regions"
+    assert estimate.market_price == 100000
+    assert estimate.confidence == "medium"
+    assert estimate.range_low == 100000
+    assert estimate.cheaper_than_percent == 100

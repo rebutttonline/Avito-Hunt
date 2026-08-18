@@ -8,7 +8,7 @@ from avito_hunt.config import get_settings
 from avito_hunt.database import Database
 from avito_hunt.domain import ListingChange
 from avito_hunt.logging import configure_logging
-from avito_hunt.market import estimate_market
+from avito_hunt.market import estimate_market_hierarchical
 from avito_hunt.messages import deal_keyboard, deal_message
 from avito_hunt.preferences import is_quiet_time, matches_preferences
 from avito_hunt.provider import ListingSource
@@ -17,21 +17,28 @@ from avito_hunt.source import JsonFeedSource
 logger = logging.getLogger(__name__)
 
 
-async def process_once(database: Database, source: ListingSource, bot: Bot | None) -> None:
+async def process_once(
+    database: Database,
+    source: ListingSource,
+    bot: Bot | None,
+    *,
+    update_source_state: bool = True,
+) -> None:
     settings = get_settings()
     batch = await source.fetch()
     listings = batch.listings
-    await database.set_system_state(
-        "source",
-        {
-            "status": "ok",
-            "provider": batch.provider,
-            "received": batch.received_count,
-            "accepted": len(listings),
-            "rejected": batch.rejected_count,
-            "fetched_at": batch.fetched_at.isoformat(),
-        },
-    )
+    if update_source_state:
+        await database.set_system_state(
+            "source",
+            {
+                "status": "ok",
+                "provider": batch.provider,
+                "received": batch.received_count,
+                "accepted": len(listings),
+                "rejected": batch.rejected_count,
+                "fetched_at": batch.fetched_at.isoformat(),
+            },
+        )
     logger.info("Received %d normalized iPhone listings", len(listings))
 
     for listing in listings:
@@ -41,13 +48,13 @@ async def process_once(database: Database, source: ListingSource, bot: Bot | Non
         record = await database.record_listing(listing)
         if record.change not in {ListingChange.NEW, ListingChange.PRICE_DROPPED}:
             continue
-        prices = await database.comparable_prices(
+        cohorts = await database.comparable_price_cohorts(
             listing,
             max_age=timedelta(days=settings.comparable_max_age_days),
         )
-        estimate = estimate_market(
+        estimate = estimate_market_hierarchical(
             listing,
-            prices,
+            cohorts,
             minimum_count=settings.min_comparable_listings,
         )
         if not estimate or not estimate.is_discounted:

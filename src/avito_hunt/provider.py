@@ -19,6 +19,14 @@ class ListingSource(Protocol):
     async def fetch(self) -> SourceBatch: ...
 
 
+class BatchSource:
+    def __init__(self, batch: SourceBatch) -> None:
+        self.batch = batch
+
+    async def fetch(self) -> SourceBatch:
+        return self.batch
+
+
 def validate_batch(batch: SourceBatch) -> None:
     if not batch.provider.strip():
         raise ValueError("Provider name is required")

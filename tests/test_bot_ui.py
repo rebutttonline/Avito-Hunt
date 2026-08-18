@@ -4,6 +4,7 @@ import pytest
 from aiogram.types import InlineKeyboardMarkup
 
 from avito_hunt.bot_service import (
+    admin_keyboard,
     back_keyboard,
     discount_keyboard,
     models_keyboard,
@@ -36,6 +37,15 @@ def test_root_panel_uses_inline_navigation() -> None:
         "panel:help",
     }
     assert "panel:resume" in callback_values(panel_keyboard(False))
+
+
+def test_admin_panel_exposes_lab_and_import() -> None:
+    assert callback_values(admin_keyboard()) == {
+        "admin:lab",
+        "admin:import",
+        "admin:root",
+        "panel:root",
+    }
 
 
 def test_every_nested_screen_has_a_back_button() -> None:

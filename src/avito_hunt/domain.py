@@ -61,6 +61,10 @@ class MarketEstimate:
     discount_percent: Decimal
     comparable_count: int
     confidence: str
+    range_low: int | None = None
+    range_high: int | None = None
+    cheaper_than_percent: int | None = None
+    market_scope: str = "exact_region"
 
     @property
     def is_discounted(self) -> bool:
@@ -88,3 +92,10 @@ class UserPreferences:
     @property
     def tracks_all_storage(self) -> bool:
         return not self.storage_options
+
+
+@dataclass(frozen=True, slots=True)
+class ComparableCohorts:
+    exact_region: tuple[int, ...]
+    nearby_regions: tuple[int, ...]
+    national: tuple[int, ...]
