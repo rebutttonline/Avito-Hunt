@@ -85,7 +85,8 @@ def test_deal_keyboard_has_two_reviewer_choices() -> None:
         button
         for row in keyboard.inline_keyboard
         for button in row
-        if button.callback_data and button.callback_data.startswith("feedback:")
+        if button.callback_data
+        and button.callback_data.startswith(("feedback:good:", "feedback:bad:"))
     ]
     assert [button.text for button in feedback_buttons] == ["🔥 Интересно", "😐 Неинтересно"]
     assert {button.callback_data.split(":", 2)[1] for button in feedback_buttons} == {
@@ -93,6 +94,11 @@ def test_deal_keyboard_has_two_reviewer_choices() -> None:
         "bad",
     }
     assert keyboard.inline_keyboard[-1][0].callback_data == "panel:root"
+    assert any(
+        button.callback_data and button.callback_data.startswith("feedback:comment:")
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
 
 
 def test_live_card_marks_condition_as_unverified_seller_claim() -> None:
@@ -120,3 +126,29 @@ def test_live_card_marks_condition_as_unverified_seller_claim() -> None:
 
     assert "новый — со слов продавца" in message
     assert "без описания и данных продавца" in message
+
+
+def test_training_card_is_explicitly_marked_as_archived() -> None:
+    listing = Listing(
+        external_id="training-card",
+        title="iPhone 13 128 ГБ",
+        url="https://example.test/training-card",
+        price=40_000,
+        model="iPhone 13",
+        storage_gb=128,
+        condition="used",
+        region="москва",
+        published_at=datetime.now(UTC),
+    )
+    estimate = MarketEstimate(
+        market_price=45_000,
+        discount_amount=5_000,
+        discount_percent=Decimal("11.1"),
+        comparable_count=15,
+        confidence="medium",
+    )
+
+    message = deal_message(listing, estimate, training=True)
+
+    assert "ОБУЧАЮЩАЯ КАРТОЧКА" in message
+    assert "может быть уже неактуально" in message

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from html import escape
 from io import BytesIO
@@ -21,9 +21,11 @@ from avito_hunt.config import get_settings
 from avito_hunt.database import Database
 from avito_hunt.domain import UserPreferences
 from avito_hunt.importer import parse_import
+from avito_hunt.learning import decision_context
 from avito_hunt.logging import configure_logging
+from avito_hunt.market import estimate_market_hierarchical
 from avito_hunt.market_lab import format_lab_report, run_market_lab
-from avito_hunt.messages import deal_message
+from avito_hunt.messages import deal_keyboard, deal_message
 from avito_hunt.preferences import (
     MODEL_GENERATIONS,
     STORAGE_OPTIONS,
@@ -32,6 +34,7 @@ from avito_hunt.preferences import (
     format_storage,
 )
 from avito_hunt.provider import BatchSource
+from avito_hunt.review_comments import analyze_review_comment
 from avito_hunt.simulator import demo_estimate
 from avito_hunt.worker_service import process_once
 
@@ -40,6 +43,7 @@ router = Router()
 database: Database
 waiting_for_region: dict[int, int] = {}
 waiting_for_import: dict[int, int] = {}
+waiting_for_feedback_comment: dict[int, str] = {}
 
 REGIONS = {
     "moscow": "москва",
@@ -444,6 +448,7 @@ async def edit_callback(callback: CallbackQuery, text: str, markup: InlineKeyboa
 async def panel_root(callback: CallbackQuery) -> None:
     waiting_for_region.pop(callback.from_user.id, None)
     waiting_for_import.pop(callback.from_user.id, None)
+    waiting_for_feedback_comment.pop(callback.from_user.id, None)
     preferences = await database.get_user_preferences(callback.from_user.id)
     if preferences:
         await edit_callback(
@@ -522,7 +527,8 @@ def privacy_text() -> str:
     return (
         "🔒 <b>Конфиденциальность</b>\n\n"
         "Бот хранит Telegram ID, имя пользователя, настройки поиска, историю "
-        "отправленных уведомлений и ваши оценки предложений. Токены, переписка с "
+        "отправленных уведомлений, оценки предложений и добровольные комментарии к ним. "
+        "Токены, переписка с "
         "продавцами и платёжные данные не собираются.\n\n"
         "Для удаления данных напишите /delete_me."
     )
@@ -542,7 +548,65 @@ async def legal_privacy(callback: CallbackQuery) -> None:
     await edit_callback(callback, privacy_text(), back_keyboard())
 
 
-@router.callback_query(F.data.startswith("feedback:"))
+@router.callback_query(F.data.startswith("feedback:comment:"))
+async def request_feedback_comment(callback: CallbackQuery) -> None:
+    if not callback.data:
+        return
+    key = callback.data.split(":", 2)[2]
+    verdict = await database.feedback_verdict(callback.from_user.id, key)
+    if not verdict:
+        await callback.answer(
+            "Сначала выберите «Интересно» или «Неинтересно»",
+            show_alert=True,
+        )
+        return
+    waiting_for_feedback_comment[callback.from_user.id] = key
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "💬 Напишите одним сообщением, почему предложение интересно или неинтересно. "
+            "Не отправляйте персональные данные продавца.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="Отмена",
+                            callback_data="feedback:comment_cancel",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data == "feedback:comment_cancel")
+async def cancel_feedback_comment(callback: CallbackQuery) -> None:
+    waiting_for_feedback_comment.pop(callback.from_user.id, None)
+    await callback.answer("Комментарий отменён")
+
+
+def is_waiting_for_feedback_comment(message: Message) -> bool:
+    return message.chat.id in waiting_for_feedback_comment and message.text is not None
+
+
+@router.message(is_waiting_for_feedback_comment)
+async def save_feedback_comment(message: Message) -> None:
+    comment = (message.text or "").strip()
+    if not 3 <= len(comment) <= 1000:
+        await message.answer("Комментарий должен содержать от 3 до 1000 символов.")
+        return
+    key = waiting_for_feedback_comment.pop(message.chat.id)
+    tags = analyze_review_comment(comment)
+    saved = await database.set_feedback_comment(message.chat.id, key, comment, tags)
+    tag_text = f"\nРаспознано: {', '.join(tags)}." if tags else ""
+    await message.answer(
+        "✅ Комментарий сохранён и привязан к оценке." + tag_text
+        if saved
+        else "⚠️ Не удалось найти оценку для комментария."
+    )
+
+
+@router.callback_query(F.data.startswith("feedback:good:") | F.data.startswith("feedback:bad:"))
 async def listing_feedback(callback: CallbackQuery) -> None:
     if not callback.data:
         return
@@ -555,7 +619,9 @@ async def listing_feedback(callback: CallbackQuery) -> None:
     elif not result.learned:
         await callback.answer("Отзыв сохранён; обучение включено для новых карточек ✅")
     else:
-        await callback.answer(f"Спасибо! Модель обучена на {result.samples} отзывах ✅")
+        await callback.answer(
+            f"Модель обучена на {result.samples} отзывах ✅ Можно добавить комментарий."
+        )
 
 
 async def admin_text() -> str:
@@ -581,6 +647,9 @@ async def admin_text() -> str:
         f"Объявления: <b>{stats['listings']}</b>\n"
         f"Уведомления: <b>{stats['notifications']}</b>\n"
         f"Отзывы: <b>{stats['feedback']}</b>\n"
+        f"Комментарии: <b>{stats['comments']}</b>\n"
+        f"Рецензенты: <b>{stats['reviewers']}</b> · "
+        f"выдано карточек: <b>{stats['review_assignments']}</b>\n"
         f"Обучающих оценок: <b>{stats['model_samples']}</b> "
         f"(🔥 {stats['model_positives']} / 😐 {stats['model_negatives']})\n"
         f"Источник: <b>{source_status}</b>{source_details}"
@@ -974,6 +1043,44 @@ async def daily_admin_report_loop(bot: Bot) -> None:
         await asyncio.sleep(300)
 
 
+async def review_training_loop(bot: Bot) -> None:
+    settings = get_settings()
+    while True:
+        try:
+            now = datetime.now(ZoneInfo("Europe/Moscow"))
+            if 9 <= now.hour < 21:
+                for chat_id, _daily_limit in await database.reviewers_due():
+                    for listing, source_provider in await database.review_candidates(chat_id):
+                        cohorts = await database.comparable_price_cohorts(
+                            listing,
+                            max_age=timedelta(days=settings.comparable_max_age_days),
+                            source_provider=source_provider,
+                        )
+                        estimate = estimate_market_hierarchical(
+                            listing,
+                            cohorts,
+                            minimum_count=settings.min_comparable_listings,
+                        )
+                        if not estimate:
+                            continue
+                        await bot.send_message(
+                            chat_id,
+                            deal_message(listing, estimate, training=True),
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                            reply_markup=deal_keyboard(listing),
+                        )
+                        await database.record_review_assignment(
+                            chat_id,
+                            listing.external_id,
+                            decision_context(listing, estimate),
+                        )
+                        break
+        except Exception:
+            logger.exception("Review training loop failed")
+        await asyncio.sleep(300)
+
+
 async def run() -> None:
     global database
     settings = get_settings()
@@ -989,6 +1096,7 @@ async def run() -> None:
 
     bot = Bot(settings.bot_token)
     report_task = asyncio.create_task(daily_admin_report_loop(bot))
+    review_task = asyncio.create_task(review_training_loop(bot))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     try:
@@ -996,8 +1104,11 @@ async def run() -> None:
         await dispatcher.start_polling(bot)
     finally:
         report_task.cancel()
+        review_task.cancel()
         with suppress(asyncio.CancelledError):
             await report_task
+        with suppress(asyncio.CancelledError):
+            await review_task
         await bot.session.close()
         await database.close()
 

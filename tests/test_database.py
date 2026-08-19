@@ -28,3 +28,10 @@ def test_schema_separates_market_data_by_provider() -> None:
     assert "source_provider TEXT NOT NULL" in SCHEMA_SQL
     assert "SET source_provider = 'demo'" in SCHEMA_SQL
     assert "listings_provider_comparable_idx" in SCHEMA_SQL
+
+
+def test_schema_persists_expert_review_queue_and_comments() -> None:
+    assert "reviewer_mode BOOLEAN" in SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS review_assignments" in SCHEMA_SQL
+    assert "ADD COLUMN IF NOT EXISTS comment TEXT" in SCHEMA_SQL
+    assert "comment_tags JSONB" in SCHEMA_SQL

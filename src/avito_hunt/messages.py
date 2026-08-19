@@ -14,6 +14,7 @@ def deal_message(
     *,
     previous_price: int | None = None,
     demo: bool = False,
+    training: bool = False,
 ) -> str:
     storage = f", {listing.storage_gb} ГБ" if listing.storage_gb else ""
     confidence = {"high": "высокая", "medium": "средняя", "low": "низкая"}.get(
@@ -49,6 +50,12 @@ def deal_message(
         old_price = f"{previous_price:,}".replace(",", " ")
         price_change = f"\n⬇️ Цена снижена с {old_price} ₽"
     demo_prefix = "🧪 <b>ДЕМОНСТРАЦИЯ</b>\n" if demo else ""
+    training_prefix = ""
+    if training:
+        training_prefix = (
+            "🧠 <b>ОБУЧАЮЩАЯ КАРТОЧКА</b>\n"
+            "<i>Объявление взято из архива и может быть уже неактуально.</i>\n\n"
+        )
     range_line = ""
     if estimate.range_low is not None and estimate.range_high is not None:
         low = f"{estimate.range_low:,}".replace(",", " ")
@@ -75,7 +82,7 @@ def deal_message(
     if listing.raw.get("source") == "avito-public-html-pilot":
         data_note = "\n🔎 Проверка: краткая карточка Avito, без описания и данных продавца"
     return (
-        f"{demo_prefix}{icon} <b>{label}</b>\n\n"
+        f"{training_prefix}{demo_prefix}{icon} <b>{label}</b>\n\n"
         f"<b>{escape(listing.title)}</b>\n"
         f"💰 Цена: <b>{price} ₽</b>\n"
         f"📊 Рыночная оценка: <b>{market_price} ₽</b>{range_line}{percentile_line}\n"
@@ -99,6 +106,12 @@ def deal_keyboard(listing: Listing) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="🔥 Интересно", callback_data=f"feedback:good:{key}"),
                 InlineKeyboardButton(text="😐 Неинтересно", callback_data=f"feedback:bad:{key}"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💬 Добавить комментарий",
+                    callback_data=f"feedback:comment:{key}",
+                )
             ],
             [InlineKeyboardButton(text="🏹 Вернуться в Avito Hunt", callback_data="panel:root")],
         ]

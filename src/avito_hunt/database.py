@@ -49,6 +49,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_code TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reviewer_mode BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reviewer_daily_limit INTEGER NOT NULL DEFAULT 20;
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_invite_code_idx
 ON users (invite_code) WHERE invite_code IS NOT NULL;
@@ -138,6 +140,21 @@ CREATE TABLE IF NOT EXISTS listing_feedback (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (chat_id, external_id)
 );
+
+ALTER TABLE listing_feedback ADD COLUMN IF NOT EXISTS comment TEXT;
+ALTER TABLE listing_feedback ADD COLUMN IF NOT EXISTS comment_updated_at TIMESTAMPTZ;
+ALTER TABLE listing_feedback ADD COLUMN IF NOT EXISTS comment_tags JSONB NOT NULL DEFAULT '[]';
+
+CREATE TABLE IF NOT EXISTS review_assignments (
+    chat_id BIGINT NOT NULL REFERENCES users(chat_id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL REFERENCES listings(external_id) ON DELETE CASCADE,
+    decision_context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (chat_id, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS review_assignments_daily_idx
+ON review_assignments (chat_id, sent_at DESC);
 
 CREATE TABLE IF NOT EXISTS reviewer_models (
     chat_id BIGINT PRIMARY KEY REFERENCES users(chat_id) ON DELETE CASCADE,
@@ -723,6 +740,15 @@ class Database:
                 chat_id,
                 external_id,
             )
+            if not raw_context:
+                raw_context = await connection.fetchval(
+                    """
+                    SELECT decision_context FROM review_assignments
+                    WHERE chat_id = $1 AND external_id = $2
+                    """,
+                    chat_id,
+                    external_id,
+                )
             context = self.decode_json_object(raw_context) if raw_context else None
             features = features_from_context(context or {})
             if not features:
@@ -767,6 +793,137 @@ class Database:
                 prediction_before=before,
                 prediction_after=after,
             )
+
+    async def feedback_verdict(self, chat_id: int, key: str) -> str | None:
+        assert self.pool
+        return await self.pool.fetchval(
+            """
+            SELECT feedback.verdict
+            FROM listing_feedback feedback
+            JOIN listings listing ON listing.external_id = feedback.external_id
+            WHERE feedback.chat_id = $1 AND listing.feedback_key = $2
+            """,
+            chat_id,
+            key,
+        )
+
+    async def set_feedback_comment(
+        self,
+        chat_id: int,
+        key: str,
+        comment: str,
+        tags: tuple[str, ...] = (),
+    ) -> bool:
+        assert self.pool
+        result = await self.pool.execute(
+            """
+            UPDATE listing_feedback feedback
+            SET comment = $3, comment_tags = $4::jsonb, comment_updated_at = NOW()
+            FROM listings listing
+            WHERE feedback.chat_id = $1
+              AND listing.feedback_key = $2
+              AND feedback.external_id = listing.external_id
+            """,
+            chat_id,
+            key,
+            comment,
+            json.dumps(tags, ensure_ascii=False),
+        )
+        return result == "UPDATE 1"
+
+    async def reviewers_due(self) -> list[tuple[int, int]]:
+        assert self.pool
+        rows = await self.pool.fetch(
+            """
+            SELECT user_account.chat_id, user_account.reviewer_daily_limit
+            FROM users user_account
+            WHERE user_account.enabled = TRUE
+              AND user_account.onboarding_completed = TRUE
+              AND user_account.reviewer_mode = TRUE
+              AND user_account.reviewer_daily_limit > 0
+              AND (
+                    SELECT COUNT(*) FROM review_assignments assignment
+                    WHERE assignment.chat_id = user_account.chat_id
+                      AND assignment.sent_at >=
+                          date_trunc('day', NOW() AT TIME ZONE 'Europe/Moscow')
+                          AT TIME ZONE 'Europe/Moscow'
+                  ) < user_account.reviewer_daily_limit
+              AND COALESCE(
+                    (
+                        SELECT MAX(assignment.sent_at)
+                        FROM review_assignments assignment
+                        WHERE assignment.chat_id = user_account.chat_id
+                    ),
+                    '-infinity'::timestamptz
+                  ) <= NOW() - INTERVAL '30 minutes'
+            ORDER BY user_account.created_at
+            """
+        )
+        return [(row["chat_id"], row["reviewer_daily_limit"]) for row in rows]
+
+    async def review_candidates(
+        self,
+        chat_id: int,
+        *,
+        limit: int = 50,
+    ) -> list[tuple[Listing, str]]:
+        assert self.pool
+        rows = await self.pool.fetch(
+            """
+            SELECT listing.*
+            FROM listings listing
+            WHERE listing.source_provider = 'avito-public-html-pilot'
+              AND listing.feedback_key IS NOT NULL
+              AND NOT EXISTS (
+                    SELECT 1 FROM review_assignments assignment
+                    WHERE assignment.chat_id = $1
+                      AND assignment.external_id = listing.external_id
+              )
+            ORDER BY RANDOM()
+            LIMIT $2
+            """,
+            chat_id,
+            limit,
+        )
+        return [(self._listing_from_row(row), row["source_provider"]) for row in rows]
+
+    async def record_review_assignment(
+        self,
+        chat_id: int,
+        external_id: str,
+        context: dict[str, object],
+    ) -> bool:
+        assert self.pool
+        result = await self.pool.execute(
+            """
+            INSERT INTO review_assignments (chat_id, external_id, decision_context)
+            VALUES ($1, $2, $3::jsonb)
+            ON CONFLICT DO NOTHING
+            """,
+            chat_id,
+            external_id,
+            json.dumps(context, ensure_ascii=False),
+        )
+        return result == "INSERT 0 1"
+
+    @staticmethod
+    def _listing_from_row(row: asyncpg.Record) -> Listing:
+        raw = row["raw"]
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        return Listing(
+            external_id=row["external_id"],
+            title=row["title"],
+            url=row["url"],
+            price=row["price"],
+            model=row["model"],
+            storage_gb=row["storage_gb"],
+            condition=row["condition"],
+            region=row["region"],
+            published_at=row["published_at"],
+            status=row["status"],
+            raw=raw or {},
+        )
 
     @staticmethod
     def _model_from_row(row: asyncpg.Record | None) -> InterestModel:
@@ -822,6 +979,9 @@ class Database:
                 (SELECT COUNT(*) FROM listings) AS listings,
                 (SELECT COUNT(*) FROM notification_events) AS notifications,
                 (SELECT COUNT(*) FROM listing_feedback) AS feedback,
+                (SELECT COUNT(*) FROM listing_feedback WHERE comment IS NOT NULL) AS comments,
+                (SELECT COUNT(*) FROM users WHERE reviewer_mode = TRUE) AS reviewers,
+                (SELECT COUNT(*) FROM review_assignments) AS review_assignments,
                 (SELECT COALESCE(SUM(samples), 0) FROM reviewer_models) AS model_samples,
                 (SELECT COALESCE(SUM(positives), 0) FROM reviewer_models) AS model_positives,
                 (SELECT COALESCE(SUM(negatives), 0) FROM reviewer_models) AS model_negatives
@@ -834,6 +994,9 @@ class Database:
             "listings": row["listings"],
             "notifications": row["notifications"],
             "feedback": row["feedback"],
+            "comments": row["comments"],
+            "reviewers": row["reviewers"],
+            "review_assignments": row["review_assignments"],
             "model_samples": row["model_samples"],
             "model_positives": row["model_positives"],
             "model_negatives": row["model_negatives"],
@@ -881,6 +1044,7 @@ class Database:
             for table, timestamp in (
                 ("notification_events", "sent_at"),
                 ("listing_feedback", "created_at"),
+                ("review_assignments", "sent_at"),
                 ("price_history", "observed_at"),
             ):
                 result = await connection.execute(
