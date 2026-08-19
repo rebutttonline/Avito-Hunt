@@ -20,6 +20,14 @@ from avito_hunt.source import JsonFeedSource
 logger = logging.getLogger(__name__)
 
 
+async def notify_admins(database: Database, bot: Bot, text: str) -> None:
+    for chat_id in await database.admin_chat_ids():
+        try:
+            await bot.send_message(chat_id, text)
+        except Exception:
+            logger.exception("Unable to send source status to admin chat_id=%s", chat_id)
+
+
 async def process_once(
     database: Database,
     source: ListingSource,
@@ -105,6 +113,16 @@ async def process_once(
                 )
             if already_sent:
                 continue
+            if await database.similar_offer_notification_exists(
+                preferences.chat_id,
+                listing,
+            ):
+                logger.info(
+                    "Suppressed likely relist external_id=%s for chat_id=%s",
+                    listing.external_id,
+                    preferences.chat_id,
+                )
+                continue
             try:
                 await bot.send_message(
                     preferences.chat_id,
@@ -179,8 +197,16 @@ async def run() -> None:
                 while True:
                     await asyncio.sleep(3600)
             try:
+                previous_failures = consecutive_failures
                 await process_once(database, source, bot)
                 consecutive_failures = 0
+                if bot and previous_failures >= 3:
+                    await notify_admins(
+                        database,
+                        bot,
+                        "✅ Источник Avito Hunt снова доступен. Проверка объявлений "
+                        "продолжилась автоматически.",
+                    )
             except Exception as error:
                 consecutive_failures += 1
                 await database.set_system_state(
@@ -193,12 +219,13 @@ async def run() -> None:
                 )
                 logger.exception("Listing processing cycle failed")
                 if bot and consecutive_failures in {3, 10}:
-                    for chat_id in await database.admin_chat_ids():
-                        await bot.send_message(
-                            chat_id,
-                            "🚨 Источник Avito Hunt недоступен: "
-                            f"{consecutive_failures} ошибок подряд.",
-                        )
+                    await notify_admins(
+                        database,
+                        bot,
+                        "⚠️ Avito временно не отвечает: "
+                        f"{consecutive_failures} ошибок подряд. Бот работает и повторит "
+                        "проверку автоматически — ничего делать не нужно.",
+                    )
             backoff = min(2 ** min(consecutive_failures, 5), 36) if consecutive_failures else 1
             jitter = secrets.randbelow(31) if settings.avito_scraper_enabled else 0
             await asyncio.sleep(interval * backoff + jitter)

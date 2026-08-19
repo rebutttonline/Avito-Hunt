@@ -575,6 +575,40 @@ class Database:
         )
         return bool(value)
 
+    async def similar_offer_notification_exists(
+        self,
+        chat_id: int,
+        listing: Listing,
+        *,
+        window: timedelta = timedelta(hours=12),
+    ) -> bool:
+        """Suppress likely shop relists without hiding different SIM variants or prices."""
+        assert self.pool
+        value = await self.pool.fetchval(
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM notification_events event
+                JOIN listings previous ON previous.external_id = event.external_id
+                WHERE event.chat_id = $1
+                  AND event.external_id <> $2
+                  AND event.sent_at >= NOW() - $3::interval
+                  AND LOWER(previous.title) = LOWER($4)
+                  AND previous.price = $5
+                  AND previous.region = $6
+                  AND COALESCE(previous.raw->>'location', '') = $7
+            )
+            """,
+            chat_id,
+            listing.external_id,
+            window,
+            listing.title,
+            listing.price,
+            listing.region,
+            str(listing.raw.get("location") or ""),
+        )
+        return bool(value)
+
     async def mark_notification_event(
         self,
         chat_id: int,

@@ -29,9 +29,16 @@ def make_listing(external_id: str, price: int) -> Listing:
 
 
 class FakeDatabase:
-    def __init__(self, change: ListingChange, *, already_sent: bool = False) -> None:
+    def __init__(
+        self,
+        change: ListingChange,
+        *,
+        already_sent: bool = False,
+        similar_sent: bool = False,
+    ) -> None:
         self.change = change
         self.already_sent = already_sent
+        self.similar_sent = similar_sent
         self.recorded: list[str] = []
         self.providers: list[str] = []
         self.events: list[tuple[int, str, int, str]] = []
@@ -80,6 +87,13 @@ class FakeDatabase:
         event_type: str,
     ) -> bool:
         return False
+
+    async def similar_offer_notification_exists(
+        self,
+        chat_id: int,
+        listing: Listing,
+    ) -> bool:
+        return self.similar_sent
 
     async def mark_notification_event(
         self,
@@ -134,6 +148,17 @@ async def test_process_once_evaluates_after_full_batch_and_rechecks_unchanged(
 @pytest.mark.asyncio
 async def test_process_once_does_not_resend_unchanged_listing() -> None:
     database = FakeDatabase(ListingChange.UNCHANGED, already_sent=True)
+    bot = FakeBot()
+
+    await process_once(database, make_source(), bot)  # type: ignore[arg-type]
+
+    assert bot.messages == []
+    assert database.events == []
+
+
+@pytest.mark.asyncio
+async def test_process_once_suppresses_likely_shop_relist() -> None:
+    database = FakeDatabase(ListingChange.NEW, similar_sent=True)
     bot = FakeBot()
 
     await process_once(database, make_source(), bot)  # type: ignore[arg-type]

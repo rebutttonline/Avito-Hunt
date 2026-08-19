@@ -19,6 +19,13 @@ def assess_listing_risk(listing: Listing) -> RiskAssessment:
     issues: list[str] = []
     score = 0
 
+    if listing.raw.get("source") == "avito-public-html-pilot":
+        score += 10
+        issues.append("описание и данные продавца пока не проверены")
+        if listing.condition == "new":
+            score += 5
+            issues.append("состояние «новое» указано продавцом")
+
     battery = _battery_health(text, listing.raw)
     if battery is not None and battery < 80:
         score += 35

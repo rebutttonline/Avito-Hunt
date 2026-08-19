@@ -32,3 +32,24 @@ def test_does_not_penalize_explicit_no_prepayment() -> None:
     result = assess_listing_risk(listing("Полный комплект, без предоплаты, iCloud отвязан"))
     assert result.level is RiskLevel.LOW
     assert result.score == 0
+
+
+def test_public_html_new_condition_is_not_treated_as_verified() -> None:
+    item = listing("", source="avito-public-html-pilot", condition="Новый")
+    item = Listing(
+        external_id=item.external_id,
+        title=item.title,
+        url=item.url,
+        price=item.price,
+        model=item.model,
+        storage_gb=item.storage_gb,
+        condition="new",
+        region=item.region,
+        published_at=item.published_at,
+        raw=item.raw,
+    )
+
+    result = assess_listing_risk(item)
+
+    assert result.score == 15
+    assert any("продавцом" in issue for issue in result.issues)

@@ -92,3 +92,31 @@ def test_deal_keyboard_has_two_reviewer_choices() -> None:
         "good",
         "bad",
     }
+    assert keyboard.inline_keyboard[-1][0].callback_data == "panel:root"
+
+
+def test_live_card_marks_condition_as_unverified_seller_claim() -> None:
+    listing = Listing(
+        external_id="live-condition",
+        title="iPhone 14 128 ГБ",
+        url="https://example.test/live-condition",
+        price=50_000,
+        model="iPhone 14",
+        storage_gb=128,
+        condition="new",
+        region="москва",
+        published_at=datetime.now(UTC),
+        raw={"source": "avito-public-html-pilot", "condition": "Новый"},
+    )
+    estimate = MarketEstimate(
+        market_price=60_000,
+        discount_amount=10_000,
+        discount_percent=Decimal("16.7"),
+        comparable_count=12,
+        confidence="medium",
+    )
+
+    message = deal_message(listing, estimate)
+
+    assert "новый — со слов продавца" in message
+    assert "без описания и данных продавца" in message

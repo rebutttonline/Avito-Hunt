@@ -65,6 +65,15 @@ def deal_message(
         "national": "рынку России",
     }
     scope = scope_labels.get(estimate.market_scope, "сопоставимому рынку")
+    condition_labels = {
+        "new": "новый — со слов продавца",
+        "used": "б/у",
+        "broken": "повреждён или на запчасти",
+    }
+    condition = condition_labels.get(listing.condition, listing.condition)
+    data_note = ""
+    if listing.raw.get("source") == "avito-public-html-pilot":
+        data_note = "\n🔎 Проверка: краткая карточка Avito, без описания и данных продавца"
     return (
         f"{demo_prefix}{icon} <b>{label}</b>\n\n"
         f"<b>{escape(listing.title)}</b>\n"
@@ -72,9 +81,9 @@ def deal_message(
         f"📊 Рыночная оценка: <b>{market_price} ₽</b>{range_line}{percentile_line}\n"
         f"📉 Выгода: <b>{discount} ₽ "
         f"({estimate.discount_percent}%)</b>\n"
-        f"📱 {escape(listing.model)}{storage}, {escape(listing.condition)}\n"
+        f"📱 {escape(listing.model)}{storage}, {escape(condition)}\n"
         f"📍 {escape(listing.region.title())}{price_change}\n"
-        f"{risk_line}\n\n"
+        f"{risk_line}{data_note}\n\n"
         f"<b>Почему это предложение:</b> {verdict}. Расчёт сделан по медиане "
         f"{estimate.comparable_count} объявлений по {scope}; уверенность: {confidence}.\n\n"
         f'<a href="{escape(listing.url, quote=True)}">Открыть объявление</a>\n\n'
@@ -91,5 +100,6 @@ def deal_keyboard(listing: Listing) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🔥 Интересно", callback_data=f"feedback:good:{key}"),
                 InlineKeyboardButton(text="😐 Неинтересно", callback_data=f"feedback:bad:{key}"),
             ],
+            [InlineKeyboardButton(text="🏹 Вернуться в Avito Hunt", callback_data="panel:root")],
         ]
     )
