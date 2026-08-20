@@ -16,6 +16,15 @@ class Settings(BaseSettings):
     )
     source_json_url: str = ""
     source_poll_seconds: int = Field(default=60, ge=15, le=3600)
+    parse_bot_api_key: SecretStr = SecretStr("")
+    parse_bot_query: str = "iphone"
+    parse_bot_category: str = "telefony"
+    parse_bot_location: str = "novokuznetsk"
+    parse_bot_price_min: int = Field(default=1_000, ge=0, le=10_000_000)
+    parse_bot_price_max: int = Field(default=100_000, ge=1, le=10_000_000)
+    parse_bot_max_pages: int = Field(default=1, ge=1, le=10)
+    parse_bot_snapshot_version: str = "129"
+    parse_bot_min_interval_seconds: int = Field(default=300, ge=60, le=21600)
     deal_discount_percent: float = Field(default=15.0, ge=1, le=90)
     min_comparable_listings: int = Field(default=10, ge=3, le=500)
     comparable_max_age_days: int = Field(default=30, ge=1, le=365)
@@ -37,6 +46,10 @@ class Settings(BaseSettings):
     @property
     def db_url(self) -> str:
         return self.database_url.get_secret_value()
+
+    @property
+    def parse_bot_key(self) -> str:
+        return self.parse_bot_api_key.get_secret_value().strip()
 
 
 @lru_cache

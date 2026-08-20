@@ -17,6 +17,7 @@ from avito_hunt.learning import decision_context
 from avito_hunt.logging import configure_logging
 from avito_hunt.market import estimate_market_hierarchical
 from avito_hunt.messages import deal_keyboard, deal_message
+from avito_hunt.parse_bot_source import ParseBotSource
 from avito_hunt.preferences import is_quiet_time, matches_preferences
 from avito_hunt.provider import ListingSource
 from avito_hunt.source import JsonFeedSource
@@ -175,7 +176,25 @@ async def run() -> None:
         source: ListingSource
         interval = settings.source_poll_seconds
         pilot_expires_at: datetime | None = None
-        if settings.source_json_url:
+        if settings.parse_bot_key:
+            source = ParseBotSource(
+                settings.parse_bot_key,
+                query=settings.parse_bot_query,
+                category=settings.parse_bot_category,
+                location=settings.parse_bot_location,
+                price_min=settings.parse_bot_price_min,
+                price_max=settings.parse_bot_price_max,
+                max_pages=settings.parse_bot_max_pages,
+                snapshot_version=settings.parse_bot_snapshot_version,
+            )
+            interval = max(interval, settings.parse_bot_min_interval_seconds)
+            logger.info(
+                "Parse.bot source enabled for %s; interval=%ds; pages=%d",
+                settings.parse_bot_location,
+                interval,
+                settings.parse_bot_max_pages,
+            )
+        elif settings.source_json_url:
             source = JsonFeedSource(settings.source_json_url)
         elif settings.avito_scraper_enabled:
             pilot_expires_at = settings.avito_scraper_expires_at
