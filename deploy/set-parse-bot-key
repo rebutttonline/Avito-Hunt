@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly APP_DIR="/opt/avito-hunt"
+readonly ENV_FILE="/etc/avito-hunt/avito-hunt.env"
+readonly SEARCH_URL="https://api.parse.bot/scraper/b54ad12b-11e9-48dd-a911-3dc6465949c4/search_items"
+
+test -f "$ENV_FILE" || { echo "Missing $ENV_FILE" >&2; exit 1; }
+
+read -rsp "Paste the rotated Parse.bot API key: " parse_bot_key
+echo
+if [[ ! "$parse_bot_key" =~ ^[A-Za-z0-9_-]{20,}$ ]]; then
+    echo "The key format looks invalid; nothing was changed." >&2
+    exit 1
+fi
+
+response_file="$(mktemp)"
+env_file="$(mktemp)"
+trap 'rm -f "$response_file" "$env_file"' EXIT
+
+status_code="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
+    --get "$SEARCH_URL" \
+    --header "X-API-Key: $parse_bot_key" \
+    --header "API-Snapshot-Version: 129" \
+    --data-urlencode "page=1" \
+    --data-urlencode "query=iphone" \
+    --data-urlencode "category=telefony" \
+    --data-urlencode "location=novokuznetsk" \
+    --data-urlencode "price_min=1000" \
+    --data-urlencode "price_max=100000")"
+if [[ "$status_code" != "200" ]] || ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"success"' "$response_file"; then
+    echo "Parse.bot rejected the key or returned an error (HTTP $status_code)." >&2
+    echo "Nothing was changed." >&2
+    exit 1
+fi
+
+awk -F= '$1 != "PARSE_BOT_API_KEY" && $1 !~ /^PARSE_BOT_/' "$ENV_FILE" > "$env_file"
+{
+    printf 'PARSE_BOT_API_KEY=%s\n' "$parse_bot_key"
+    printf 'PARSE_BOT_QUERY=iphone\n'
+    printf 'PARSE_BOT_CATEGORY=telefony\n'
+    printf 'PARSE_BOT_LOCATION=novokuznetsk\n'
+    printf 'PARSE_BOT_PRICE_MIN=1000\n'
+    printf 'PARSE_BOT_PRICE_MAX=100000\n'
+    printf 'PARSE_BOT_MAX_PAGES=1\n'
+    printf 'PARSE_BOT_SNAPSHOT_VERSION=129\n'
+    printf 'PARSE_BOT_MIN_INTERVAL_SECONDS=300\n'
+} >> "$env_file"
+install -m 600 -o root -g root "$env_file" "$ENV_FILE"
+
+compose=(docker compose --env-file "$ENV_FILE" --project-directory "$APP_DIR" -f "$APP_DIR/compose.yaml")
+"${compose[@]}" config --quiet
+"${compose[@]}" up -d --no-deps --force-recreate worker
+
+echo "Parse.bot is connected. The worker will poll one page every five minutes."

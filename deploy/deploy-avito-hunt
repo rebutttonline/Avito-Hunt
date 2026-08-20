@@ -21,6 +21,7 @@ fi
 
 # Keep root-owned operational files synchronized with the reviewed main branch.
 install -m 755 "$APP_DIR/deploy/deploy-avito-hunt" /usr/local/sbin/deploy-avito-hunt
+install -m 755 "$APP_DIR/deploy/set-parse-bot-key" /usr/local/sbin/set-avito-hunt-parse-bot-key
 install -m 755 "$APP_DIR/deploy/backup-avito-hunt" /usr/local/sbin/backup-avito-hunt
 install -m 644 "$APP_DIR/deploy/avito-hunt-backup.service" \
     /etc/systemd/system/avito-hunt-backup.service
