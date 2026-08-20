@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 readonly APP_DIR="/opt/avito-hunt"
 readonly ENV_FILE="/etc/avito-hunt/avito-hunt.env"
-readonly SEARCH_URL="https://api.parse.bot/scraper/b54ad12b-11e9-48dd-a911-3dc6465949c4/search_items"
+readonly AUTH_CHECK_URL="https://api.parse.bot/dispatch/tasks?limit=1"
 
 test -f "$ENV_FILE" || { echo "Missing $ENV_FILE" >&2; exit 1; }
 
@@ -19,17 +19,11 @@ env_file="$(mktemp)"
 trap 'rm -f "$response_file" "$env_file"' EXIT
 
 status_code="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
-    --get "$SEARCH_URL" \
-    --header "X-API-Key: $parse_bot_key" \
-    --header "API-Snapshot-Version: 129" \
-    --data-urlencode "page=1" \
-    --data-urlencode "query=iphone" \
-    --data-urlencode "category=telefony" \
-    --data-urlencode "location=novokuznetsk" \
-    --data-urlencode "price_min=1000" \
-    --data-urlencode "price_max=100000")"
-if [[ "$status_code" != "200" ]] || ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"success"' "$response_file"; then
-    echo "Parse.bot rejected the key or returned an error (HTTP $status_code)." >&2
+    --retry 2 --retry-delay 1 --retry-all-errors \
+    --get "$AUTH_CHECK_URL" \
+    --header "X-API-Key: $parse_bot_key")"
+if [[ "$status_code" != "200" ]]; then
+    echo "Parse.bot rejected the key or its authentication service returned an error (HTTP $status_code)." >&2
     echo "Nothing was changed." >&2
     exit 1
 fi
