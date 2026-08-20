@@ -5,7 +5,11 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot
 
-from avito_hunt.avito_html_source import AvitoHtmlSource, parse_targets
+from avito_hunt.avito_html_source import (
+    AVITO_PRIVATE_HTML_PROVIDER,
+    AvitoHtmlSource,
+    parse_targets,
+)
 from avito_hunt.config import get_settings
 from avito_hunt.database import Database
 from avito_hunt.domain import ListingChange
@@ -67,6 +71,17 @@ async def process_once(
     # enough comparable listings have accumulated or a user changes preferences.
     users = await database.enabled_user_preferences()
     for listing, record in candidates:
+        if (
+            batch.provider == AVITO_PRIVATE_HTML_PROVIDER
+            and batch.fetched_at - listing.published_at
+            > timedelta(minutes=settings.avito_scraper_max_listing_age_minutes)
+        ):
+            logger.info(
+                "Skipped stale live alert external_id=%s published_at=%s",
+                listing.external_id,
+                listing.published_at.isoformat(),
+            )
+            continue
         cohorts = await database.comparable_price_cohorts(
             listing,
             max_age=timedelta(days=settings.comparable_max_age_days),
@@ -166,10 +181,7 @@ async def run() -> None:
             pilot_expires_at = settings.avito_scraper_expires_at
             if not pilot_expires_at or pilot_expires_at.tzinfo is None:
                 raise RuntimeError("AVITO_SCRAPER_EXPIRES_AT must be timezone-aware")
-            source = AvitoHtmlSource(
-                parse_targets(settings.avito_scraper_targets),
-                max_listing_age=timedelta(minutes=settings.avito_scraper_max_listing_age_minutes),
-            )
+            source = AvitoHtmlSource(parse_targets(settings.avito_scraper_targets))
             interval = max(interval, settings.avito_scraper_min_interval_seconds)
             logger.warning(
                 "Limited Avito HTML pilot enabled until %s; interval=%ds",
@@ -192,7 +204,7 @@ async def run() -> None:
                     "source",
                     {
                         "status": "expired",
-                        "provider": "avito-public-html-pilot",
+                        "provider": AVITO_PRIVATE_HTML_PROVIDER,
                         "expired_at": pilot_expires_at.isoformat(),
                     },
                 )

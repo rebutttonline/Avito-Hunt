@@ -12,6 +12,7 @@ from avito_hunt.normalization import listing_from_payload
 from avito_hunt.provider import SourceBatch, validate_batch
 
 AVITO_ORIGIN = "https://www.avito.ru"
+AVITO_PRIVATE_HTML_PROVIDER = "avito-public-html-private-pilot"
 BLOCKED_PATH_PREFIXES = ("/api/", "/web/", "/s/", "/search/", "/autosearch")
 NEWEST_FIRST_QUERY = {"s": "104"}
 _RELATIVE_AGE = re.compile(r"(?P<count>\d+)\s+(?P<unit>секунд|минут|час)", re.I)
@@ -69,11 +70,9 @@ class AvitoHtmlSource:
         targets: tuple[ScrapeTarget, ...],
         *,
         timeout: float = 25.0,
-        max_listing_age: timedelta = timedelta(minutes=90),
     ) -> None:
         self.targets = targets
         self.timeout = timeout
-        self.max_listing_age = max_listing_age
 
     async def fetch(self) -> SourceBatch:
         fetched_at = datetime.now(UTC)
@@ -98,13 +97,12 @@ class AvitoHtmlSource:
                     response.text,
                     target.region,
                     fetched_at,
-                    max_listing_age=self.max_listing_age,
                 )
                 received_count += parsed[1]
                 for listing in parsed[0]:
                     listings_by_id.setdefault(listing.external_id, listing)
         batch = SourceBatch(
-            provider="avito-public-html-pilot",
+            provider=AVITO_PRIVATE_HTML_PROVIDER,
             listings=tuple(listings_by_id.values()),
             fetched_at=fetched_at,
             received_count=received_count,

@@ -1,7 +1,8 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from avito_hunt.avito_html_source import AVITO_PRIVATE_HTML_PROVIDER
 from avito_hunt.domain import (
     ComparableCohorts,
     Listing,
@@ -163,5 +164,37 @@ async def test_process_once_suppresses_likely_shop_relist() -> None:
 
     await process_once(database, make_source(), bot)  # type: ignore[arg-type]
 
+    assert bot.messages == []
+    assert database.events == []
+
+
+@pytest.mark.asyncio
+async def test_process_once_persists_but_does_not_alert_stale_private_listing() -> None:
+    database = FakeDatabase(ListingChange.NEW)
+    bot = FakeBot()
+    stale = Listing(
+        external_id="stale-private",
+        title="iPhone 15 Pro 256 ГБ",
+        url="https://www.avito.ru/novokuznetsk/telefony/stale-private",
+        price=75_000,
+        model="iPhone 15 Pro",
+        storage_gb=256,
+        condition="used",
+        region="новокузнецк",
+        published_at=datetime.now(UTC) - timedelta(hours=5),
+        raw={"source": "avito-public-html-pilot", "seller_kind": "private"},
+    )
+    source = BatchSource(
+        SourceBatch(
+            provider=AVITO_PRIVATE_HTML_PROVIDER,
+            listings=(stale,),
+            fetched_at=datetime.now(UTC),
+            received_count=1,
+        )
+    )
+
+    await process_once(database, source, bot)  # type: ignore[arg-type]
+
+    assert database.recorded == ["stale-private"]
     assert bot.messages == []
     assert database.events == []
