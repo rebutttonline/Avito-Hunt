@@ -1,7 +1,9 @@
+import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -11,6 +13,13 @@ from avito_hunt.provider import SourceBatch, validate_batch
 
 AVITO_ORIGIN = "https://www.avito.ru"
 BLOCKED_PATH_PREFIXES = ("/api/", "/web/", "/s/", "/search/", "/autosearch")
+NEWEST_FIRST_QUERY = {"s": "104"}
+_RELATIVE_AGE = re.compile(r"(?P<count>\d+)\s+(?P<unit>секунд|минут|час)", re.I)
+_CLOCK_TIME = re.compile(r"(?P<hour>\d{1,2}):(?P<minute>\d{2})")
+_REGION_TIMEZONES = {
+    "москва": "Europe/Moscow",
+    "новокузнецк": "Asia/Novokuznetsk",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,9 +64,16 @@ def validate_public_category_url(url: str) -> None:
 class AvitoHtmlSource:
     """Low-frequency reader for server-rendered cards on public category pages."""
 
-    def __init__(self, targets: tuple[ScrapeTarget, ...], *, timeout: float = 25.0) -> None:
+    def __init__(
+        self,
+        targets: tuple[ScrapeTarget, ...],
+        *,
+        timeout: float = 25.0,
+        max_listing_age: timedelta = timedelta(minutes=90),
+    ) -> None:
         self.targets = targets
         self.timeout = timeout
+        self.max_listing_age = max_listing_age
 
     async def fetch(self) -> SourceBatch:
         fetched_at = datetime.now(UTC)
@@ -74,11 +90,16 @@ class AvitoHtmlSource:
             headers=headers,
         ) as client:
             for target in self.targets:
-                response = await client.get(target.url)
+                response = await client.get(_newest_first_url(target.url))
                 if response.status_code in {403, 429}:
                     raise RuntimeError(f"Avito ограничил запрос: HTTP {response.status_code}")
                 response.raise_for_status()
-                parsed = parse_avito_cards(response.text, target.region, fetched_at)
+                parsed = parse_avito_cards(
+                    response.text,
+                    target.region,
+                    fetched_at,
+                    max_listing_age=self.max_listing_age,
+                )
                 received_count += parsed[1]
                 for listing in parsed[0]:
                     listings_by_id.setdefault(listing.external_id, listing)
@@ -97,12 +118,56 @@ def parse_avito_cards(
     html: str,
     region: str,
     fetched_at: datetime,
+    *,
+    max_listing_age: timedelta | None = None,
 ) -> tuple[list[Listing], int]:
     parser = _CardParser(region, fetched_at)
     parser.feed(html)
     parser.close()
-    listings = [listing for payload in parser.items if (listing := listing_from_payload(payload))]
+    listings = []
+    for payload in parser.items:
+        listing = listing_from_payload(payload)
+        if not listing:
+            continue
+        if max_listing_age is not None and fetched_at - listing.published_at > max_listing_age:
+            continue
+        listings.append(listing)
     return listings, len(parser.items)
+
+
+def parse_avito_published_at(value: object, fetched_at: datetime, region: str) -> datetime:
+    """Convert Avito's visible relative date into a timezone-aware UTC timestamp."""
+    text = " ".join(str(value or "").casefold().replace("ё", "е").split())
+    if not text or text == "только что":
+        return fetched_at
+    relative = _RELATIVE_AGE.search(text)
+    if relative:
+        count = int(relative.group("count"))
+        unit = relative.group("unit")
+        if unit.startswith("секунд"):
+            return fetched_at - timedelta(seconds=count)
+        if unit.startswith("минут"):
+            return fetched_at - timedelta(minutes=count)
+        return fetched_at - timedelta(hours=count)
+
+    timezone = ZoneInfo(_REGION_TIMEZONES.get(region.casefold(), "Europe/Moscow"))
+    local_now = fetched_at.astimezone(timezone)
+    clock = _CLOCK_TIME.search(text)
+    parsed_time = time(int(clock.group("hour")), int(clock.group("minute"))) if clock else time.min
+    if text.startswith("сегодня"):
+        local_date = local_now.date()
+    elif text.startswith("вчера"):
+        local_date = local_now.date() - timedelta(days=1)
+    else:
+        return fetched_at
+    return datetime.combine(local_date, parsed_time, timezone).astimezone(UTC)
+
+
+def _newest_first_url(url: str) -> str:
+    parsed = urlsplit(url)
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(NEWEST_FIRST_QUERY), "")
+    )
 
 
 class _CardParser(HTMLParser):
@@ -115,6 +180,7 @@ class _CardParser(HTMLParser):
         self.item_div_depth = 0
         self.capture: str | None = None
         self.capture_tag: str | None = None
+        self.description_block_depth: int | None = None
 
     def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
         attrs = dict(attrs_list)
@@ -124,9 +190,27 @@ class _CardParser(HTMLParser):
             return
         if self.current is None:
             return
+        classes = (attrs.get("class") or "").split()
         if tag == "div":
             self.item_div_depth += 1
+            if any(class_name.startswith("bottomBlock-") for class_name in classes):
+                self.description_block_depth = self.item_div_depth
         marker = attrs.get("data-marker")
+        href = attrs.get("href", "") or ""
+        if tag == "a" and href.startswith("/brands/"):
+            self.current["seller_kind"] = "business"
+            self.current["seller_url"] = urljoin(AVITO_ORIGIN, href)
+        elif tag == "a" and "src=search_seller_info" in href:
+            self.current.setdefault("seller_url", urljoin(AVITO_ORIGIN, href))
+        if tag == "img" and marker == "item-user-logo" and attrs.get("alt"):
+            self.current["seller_name"] = attrs["alt"]
+        if (
+            tag == "p"
+            and self.description_block_depth is not None
+            and "description" not in self.current
+        ):
+            self.capture = "description"
+            self.capture_tag = tag
         if tag == "a" and marker == "item-title":
             self.current["title"] = attrs.get("title", "")
             href = attrs.get("href", "")
@@ -152,6 +236,8 @@ class _CardParser(HTMLParser):
             self.capture = None
             self.capture_tag = None
         if tag == "div":
+            if self.item_div_depth == self.description_block_depth:
+                self.description_block_depth = None
             self.item_div_depth -= 1
             if self.item_div_depth == 0:
                 self._finish_item()
@@ -166,11 +252,14 @@ class _CardParser(HTMLParser):
         assert self.current is not None
         if not self.current.get("title"):
             self.current["title"] = self.current.get("title_text", "")
+        published_at = parse_avito_published_at(
+            self.current.get("date"), self.fetched_at, self.region
+        )
         self.current.update(
             {
                 "region": self.region,
                 "condition": self.current.get("condition", "used"),
-                "published_at": self.fetched_at.isoformat(),
+                "published_at": published_at.isoformat(),
                 "source": "avito-public-html-pilot",
             }
         )
@@ -179,3 +268,4 @@ class _CardParser(HTMLParser):
         self.item_div_depth = 0
         self.capture = None
         self.capture_tag = None
+        self.description_block_depth = None

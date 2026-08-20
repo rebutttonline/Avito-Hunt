@@ -22,13 +22,20 @@
 
 ```dotenv
 AVITO_SCRAPER_ENABLED=true
-AVITO_SCRAPER_TARGETS=москва|https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc
+AVITO_SCRAPER_TARGETS=новокузнецк|https://www.avito.ru/novokuznetsk/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc
 AVITO_SCRAPER_MIN_INTERVAL_SECONDS=600
+AVITO_SCRAPER_MAX_LISTING_AGE_MINUTES=90
 AVITO_SCRAPER_EXPIRES_AT=2026-09-01T16:30:00Z
 ```
 
 `SOURCE_JSON_URL` имеет приоритет: когда появится разрешённый поставщик, воркер
 автоматически использует его вместо HTML-пилота.
+
+Пилот запрашивает выдачу «сначала новые», преобразует видимый возраст карточки
+в дату публикации и не принимает объявления старше заданного лимита. Карточки
+профессиональных продавцов со страницами Avito `/brands/` исключаются до расчёта
+рыночной медианы. Из краткого описания также отсекаются обмен, неисправные
+устройства, запчасти, копии и цены-заглушки.
 
 ## Что измеряем
 

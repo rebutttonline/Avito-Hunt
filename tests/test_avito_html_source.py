@@ -1,9 +1,10 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from avito_hunt.avito_html_source import (
     parse_avito_cards,
+    parse_avito_published_at,
     parse_targets,
     validate_public_category_url,
 )
@@ -61,3 +62,46 @@ def test_parses_limited_region_targets() -> None:
         "Казань|https://www.avito.ru/kazan/telefony/apple-ASgBAg"
     )
     assert [target.region for target in targets] == ["москва", "казань"]
+
+
+def test_parses_relative_publication_age() -> None:
+    fetched_at = datetime(2026, 8, 20, 4, 30, tzinfo=UTC)
+    assert parse_avito_published_at("5 часов назад", fetched_at, "москва") == datetime(
+        2026, 8, 19, 23, 30, tzinfo=UTC
+    )
+    assert parse_avito_published_at("Сегодня, 07:15", fetched_at, "новокузнецк") == datetime(
+        2026, 8, 20, 0, 15, tzinfo=UTC
+    )
+
+
+def test_filters_business_sellers_and_stale_cards() -> None:
+    fetched_at = datetime(2026, 8, 20, 4, 30, tzinfo=UTC)
+    business = HTML.replace(
+        '<a data-marker="item-title"',
+        '<a href="/brands/phone-shop?src=search_seller_info"></a><a data-marker="item-title"',
+    )
+    listings, received = parse_avito_cards(business, "москва", fetched_at)
+    assert received == 1
+    assert listings == []
+
+
+def test_reads_card_description_before_screening() -> None:
+    fetched_at = datetime(2026, 8, 20, 4, 30, tzinfo=UTC)
+    exchange = HTML.replace(
+        '<div data-marker="item-date">Сегодня, 12:30</div>',
+        '<div class="bottomBlock-test"><p>Телефон рабочий. Возможен обмен.</p></div>'
+        '<div data-marker="item-date">Сегодня, 12:30</div>',
+    )
+    listings, received = parse_avito_cards(exchange, "москва", fetched_at)
+    assert received == 1
+    assert listings == []
+
+    stale = HTML.replace("Сегодня, 12:30", "5 часов назад")
+    listings, received = parse_avito_cards(
+        stale,
+        "москва",
+        fetched_at,
+        max_listing_age=timedelta(minutes=90),
+    )
+    assert received == 1
+    assert listings == []

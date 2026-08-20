@@ -10,6 +10,7 @@ class RejectionReason(StrEnum):
     ACCESSORY = "accessory"
     PARTS = "parts"
     PRICE_PLACEHOLDER = "price_placeholder"
+    BUSINESS_SELLER = "business_seller"
 
 
 _SPACE = re.compile(r"\s+")
@@ -53,6 +54,15 @@ def rejection_reason(payload: dict[str, Any]) -> RejectionReason | None:
     description = _normalize(payload.get("description"))
     condition = _normalize(payload.get("condition"))
     combined = " ".join((title, description, condition))
+
+    seller_kind = _normalize(payload.get("seller_kind") or payload.get("seller_type"))
+    seller_url = _normalize(payload.get("seller_url"))
+    if (
+        seller_kind in {"business", "company", "shop", "professional"}
+        or payload.get("is_business") is True
+        or "/brands/" in seller_url
+    ):
+        return RejectionReason.BUSINESS_SELLER
 
     if any(marker in combined for marker in _PARTS):
         return RejectionReason.PARTS

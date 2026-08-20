@@ -12,6 +12,10 @@ from avito_hunt.screening import RejectionReason, rejection_reason
         ({"title": "Коробка от iPhone 15 Pro"}, RejectionReason.ACCESSORY),
         ({"title": "iPhone 15 Pro на запчасти"}, RejectionReason.PARTS),
         ({"title": "iPhone 15 Pro, цена от 1000 ₽"}, RejectionReason.PRICE_PLACEHOLDER),
+        (
+            {"title": "iPhone 15 Pro", "seller_url": "https://www.avito.ru/brands/shop"},
+            RejectionReason.BUSINESS_SELLER,
+        ),
     ],
 )
 def test_rejects_non_comparable_offers(payload: dict[str, str], expected: RejectionReason) -> None:

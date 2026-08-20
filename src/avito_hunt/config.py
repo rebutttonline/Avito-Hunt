@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     avito_scraper_enabled: bool = False
     avito_scraper_targets: str = ""
     avito_scraper_min_interval_seconds: int = Field(default=600, ge=300, le=21600)
+    avito_scraper_max_listing_age_minutes: int = Field(default=90, ge=10, le=1440)
     avito_scraper_expires_at: datetime | None = None
 
     @field_validator("avito_scraper_expires_at", mode="before")

@@ -166,7 +166,10 @@ async def run() -> None:
             pilot_expires_at = settings.avito_scraper_expires_at
             if not pilot_expires_at or pilot_expires_at.tzinfo is None:
                 raise RuntimeError("AVITO_SCRAPER_EXPIRES_AT must be timezone-aware")
-            source = AvitoHtmlSource(parse_targets(settings.avito_scraper_targets))
+            source = AvitoHtmlSource(
+                parse_targets(settings.avito_scraper_targets),
+                max_listing_age=timedelta(minutes=settings.avito_scraper_max_listing_age_minutes),
+            )
             interval = max(interval, settings.avito_scraper_min_interval_seconds)
             logger.warning(
                 "Limited Avito HTML pilot enabled until %s; interval=%ds",
